@@ -397,6 +397,7 @@ If you need to checkout or bisect repositories located outside your working dire
 1. **NEVER push anything to GitHub** (`git push`, `gh issue comment`, `gh issue close`, etc., are strictly forbidden).
 2. **NEVER modify live repositories on the internet.**
 3. All work, reproduction tests, and findings must remain local and isolated.
+4. **NEVER modify or write files directly inside parent checkouts** (e.g. `../emscripten`, `../llvm-project`, `../binaryen`, `../emsdk`). ALL file edits (`replace_file_content`, `write_to_file`, scratch files, build artifacts) MUST take place inside your assigned workspace `{resolved_item_dir}` or inside an on-demand worktree (`{resolved_item_dir}/<repo>`).
 
 ### Instructions & Guidance
 1. Read the triage skill instructions located at `{skill_path}` using file viewing tools.
@@ -476,12 +477,14 @@ def spawn_subagent(
     timeout: int,
     title: str,
     dry_run: bool = False,
+    agent_id: Optional[int] = None,
 ) -> Dict[str, Any]:
     """Launch the sub-agent runner and return execution status."""
+    prefix = f"Agent[{agent_id}] " if agent_id is not None else ""
     result_path = item_dir / "result.json"
 
     if dry_run:
-        logging.info(f"[DRY-RUN] Would spawn subagent for: {title}")
+        logging.info(f"[DRY-RUN] {prefix}Would spawn agent for: {title}")
         return {"status": "dry_run", "error": None}
 
     if "ANTIGRAVITY_LS_ADDRESS" not in os.environ:
@@ -498,7 +501,7 @@ def spawn_subagent(
     agentapi_path = find_agentapi()
     cmd = [agentapi_path, "new-conversation", f"--title={title}", prompt]
 
-    logging.info(f"Spawning sub-agent for {title}...")
+    logging.info(f"{prefix}Spawning agent for {title}...")
     max_retries = 3
     for attempt in range(1, max_retries + 1):
         try:
@@ -510,12 +513,12 @@ def spawn_subagent(
             err_msg = proc.stderr.strip() or proc.stdout.strip() or "Non-zero exit code"
             if attempt < max_retries:
                 logging.warning(
-                    f"Sub-agent spawn attempt {attempt}/{max_retries} failed (code {proc.returncode}). Retrying in 2s..."
+                    f"{prefix}Spawn attempt {attempt}/{max_retries} failed (code {proc.returncode}). Retrying in 2s..."
                 )
                 time.sleep(2)
             else:
                 logging.error(
-                    f"Sub-agent runner failed after {max_retries} attempts with code {proc.returncode}: {err_msg}"
+                    f"{prefix}Runner failed after {max_retries} attempts with code {proc.returncode}: {err_msg}"
                 )
                 return {
                     "status": "failed",
@@ -537,17 +540,17 @@ def format_duration(seconds: int) -> str:
 
 
 def wait_for_pending_subagents(
-    pending_items: Dict[str, Path],
+    pending_items: Dict[str, Tuple[Path, Optional[int]]],
     timeout: int,
     output_dir: Path,
     status_data: Dict[str, Any],
 ) -> None:
-    """Wait for all spawned async sub-agents to complete their investigations before exiting."""
+    """Wait for all spawned async agents to complete their investigations before exiting."""
     if not pending_items:
         return
 
     logging.info(
-        f"Waiting for {len(pending_items)} sub-agent(s) to complete investigations (timeout: {format_duration(timeout)})..."
+        f"Waiting for {len(pending_items)} agent(s) to complete investigations (timeout: {format_duration(timeout)})..."
     )
     start_time = time.time()
     poll_interval = 5
@@ -555,9 +558,10 @@ def wait_for_pending_subagents(
 
     while remaining and (time.time() - start_time < timeout):
         finished_keys = []
-        for item_key, result_file in remaining.items():
+        for item_key, (result_file, aid) in remaining.items():
+            prefix = f"Agent[{aid}] " if aid is not None else ""
             if result_file.exists():
-                logging.info(f"Sub-agent finished investigation for {item_key}.")
+                logging.info(f"{prefix}Finished investigation for {item_key}.")
                 cleanup_item_worktrees(result_file.parent)
                 finished_keys.append(item_key)
 
@@ -573,7 +577,7 @@ def wait_for_pending_subagents(
 
     if remaining:
         logging.warning(
-            f"Timed out waiting for {len(remaining)} sub-agent(s): {', '.join(remaining.keys())}"
+            f"Timed out waiting for {len(remaining)} agent(s): {', '.join(remaining.keys())}"
         )
         for item_key in remaining.keys():
             if item_key in status_data.get("items", {}):
@@ -589,7 +593,7 @@ def wait_for_pending_subagents(
                     cleanup_item_worktrees(output_dir / repo_short / itype / str(num))
         save_status(output_dir, status_data)
     else:
-        logging.info("All sub-agents completed successfully.")
+        logging.info("All agents completed successfully.")
 
 
 def archive_previous_run(item_dir: Path) -> Optional[Path]:
@@ -627,6 +631,7 @@ def process_item(
     force: bool = False,
     reinvestigate: bool = False,
     fast_mode: bool = False,
+    agent_id: Optional[int] = None,
 ) -> Tuple[bool, Optional[Path]]:
     """Process a single issue or PR. Returns (did_process, pending_result_file)."""
     number = item.get("number")
@@ -668,12 +673,13 @@ def process_item(
     with open(item_dir / "metadata.json", "w", encoding="utf-8") as f:
         json.dump(item, f, indent=2)
 
-    logging.info(f"\n--- Triaging {item_key}: {title} ---")
+    prefix = f"Agent[{agent_id}] " if agent_id is not None else ""
+    logging.info(f"--- {prefix}Triaging {item_key}: {title} ---")
     prompt = build_subagent_prompt(
         item, repo, item_type, item_dir, skill_dir, fast_mode=fast_mode, timeout=timeout
     )
     exec_info = spawn_subagent(
-        prompt, item_dir, timeout, f"Triage {item_key}", dry_run=dry_run
+        prompt, item_dir, timeout, f"Triage {item_key}", dry_run=dry_run, agent_id=agent_id
     )
     if dry_run:
         return True, None
@@ -845,7 +851,7 @@ def main() -> int:
     if args.fast:
         logging.info(f"FAST TRIAGE MODE active (timeout: {format_duration(args.timeout)}).")
     else:
-        logging.info(f"Timeout per sub-agent: {format_duration(args.timeout)}.")
+        logging.info(f"Timeout per agent: {format_duration(args.timeout)}.")
 
     while True:
         status_data = load_status(args.output_dir)
@@ -860,7 +866,8 @@ def main() -> int:
             archive_closed_items(args.output_dir, status_data, env=clean_env)
 
         processed_any = False
-        pending_subagents: Dict[str, Path] = {}
+        pending_subagents: Dict[str, Tuple[Path, int]] = {}
+        agent_counter = 0
 
         for repo in repos:
             for itype in item_types:
@@ -884,16 +891,16 @@ def main() -> int:
                     if args.limit > 0 and processed_in_type >= args.limit:
                         break
 
-                    # Enforce concurrency throttling: wait if active subagents >= concurrency limit
+                    # Enforce concurrency throttling: wait if active agents >= concurrency limit
                     while (
                         args.concurrency > 0
                         and len(pending_subagents) >= args.concurrency
                     ):
                         finished_keys = []
-                        for item_key, result_file in pending_subagents.items():
+                        for item_key, (result_file, aid) in pending_subagents.items():
                             if result_file.exists():
                                 logging.info(
-                                    f"Sub-agent finished investigation for {item_key}."
+                                    f"Agent[{aid}] Finished investigation for {item_key}."
                                 )
                                 cleanup_item_worktrees(result_file.parent)
                                 finished_keys.append(item_key)
@@ -920,6 +927,11 @@ def main() -> int:
                         logging.info(f"Skipped {skipped_in_type} already completed/investigated issue(s).")
                         skipped_in_type = 0
 
+                    current_agent_id = None
+                    if will_process:
+                        agent_counter += 1
+                        current_agent_id = agent_counter
+
                     did_process, pending_file = process_item(
                         item=item,
                         repo=repo,
@@ -933,6 +945,7 @@ def main() -> int:
                         force=args.force,
                         reinvestigate=is_reinvestigate,
                         fast_mode=args.fast,
+                        agent_id=current_agent_id,
                     )
                     if did_process:
                         processed_any = True
@@ -940,10 +953,10 @@ def main() -> int:
                     else:
                         skipped_in_type += 1
 
-                    if pending_file:
+                    if pending_file and current_agent_id is not None:
                         repo_short = get_short_repo_name(repo)
                         item_key = f"{repo_short}:{itype}:{item.get('number')}"
-                        pending_subagents[item_key] = pending_file
+                        pending_subagents[item_key] = (pending_file, current_agent_id)
 
                 if skipped_in_type > 0:
                     logging.info(f"Skipped {skipped_in_type} already completed/investigated issue(s).")

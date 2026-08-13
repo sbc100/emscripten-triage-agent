@@ -12,6 +12,7 @@ Emscripten or Emscripten SDK issue or pull request.
 1. **NEVER push anything to GitHub** (`git push`, `gh issue comment`, `gh issue close`, `gh pr review`, etc. are STRICTLY FORBIDDEN).
 2. **NEVER modify any remote repositories or issues online.**
 3. All work, git checkouts, bisection runs, test scripts, and log outputs must remain strictly on the local filesystem.
+4. **NEVER modify or write files inside parent checkouts** (e.g. `../emscripten`, `../llvm-project`, `../binaryen`, `../emsdk`). ALL file edits (`replace_file_content`, `write_to_file`, scratch files, build artifacts) MUST take place inside your assigned workspace (`$PWD`) or inside an on-demand worktree (`$PWD/<repo>`).
 
 ## Your Goal & Deliverables
 
