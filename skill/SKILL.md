@@ -58,7 +58,20 @@ If an issue reproduced on an older release but works on `main` (meaning it was f
 - See `references/bisection.md` for exact instructions on using `emsdk` and binary releases to bisect across tags in `emscripten-releases-tags.json`.
 - Once the release range is narrowed, determine whether the change originated in `emscripten`, `llvm-project`, or `binaryen`.
 
-### 4. Writing Final Results
+### 4. Multi-Repository Worktree Guidance (On-Demand Isolation)
+If your investigation requires checking out specific commits, bisecting, or editing code in shared repositories located outside the working directory (e.g., the current user's existing checkouts like `emscripten`, `llvm-project`, `binaryen`, `emsdk`):
+- **NEVER run `git checkout` or `git bisect` directly inside shared checkouts** (`../<repo>`).
+- **Construct an on-demand worktree** inside your assigned worktree folder:
+  ```bash
+  git -C ../<repo> worktree add --detach ./<repo>_worktree HEAD
+  ```
+- Perform all testing, bisection, or building inside `./<repo>_worktree`.
+- Clean up your worktree when finished:
+  ```bash
+  git -C ../<repo> worktree remove --force ./<repo>_worktree
+  ```
+
+### 5. Writing Final Results
 Once your investigation finishes:
 1. Save your full notes into `investigation.md`.
 2. Write the JSON payload matching the exact schema above into `result.json`.

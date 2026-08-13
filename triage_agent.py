@@ -312,6 +312,21 @@ def archive_closed_items(
     return archived_count
 
 
+def cleanup_item_worktrees(item_dir: Path) -> None:
+    """Clean up any on-demand git worktrees created inside the item directory."""
+    if not item_dir.exists():
+        return
+    for path in item_dir.glob("*worktree*"):
+        if path.is_dir():
+            try:
+                run_command(["git", "worktree", "remove", "--force", str(path)], check=False)
+                if path.exists():
+                    shutil.rmtree(path, ignore_errors=True)
+            except Exception as exc:
+                logging.warning(f"Error cleaning up worktree at {path}: {exc}")
+    run_command(["git", "worktree", "prune"], check=False)
+
+
 def build_subagent_prompt(
     item: Dict[str, Any],
     repo: str,
@@ -329,6 +344,7 @@ def build_subagent_prompt(
     skill_path = (skill_dir / "SKILL.md").resolve()
     result_path = (item_dir / "result.json").resolve()
     investigation_path = (item_dir / "investigation.md").resolve()
+    resolved_item_dir = item_dir.resolve()
 
     prompt = f"""You are a specialized Emscripten triage and reproduction agent.
 Your objective is to investigate open {item_type} #{number} ({title}) in `{repo}`.
@@ -340,6 +356,13 @@ Your objective is to investigate open {item_type} #{number} ({title}) in `{repo}
 - **Created At**: {created_at}
 - **Description / Body**:
 {body}
+
+### DEDICATED ISOLATED WORKSPACE
+Your assigned working directory for this item is:
+`{resolved_item_dir}`
+
+If you need to checkout or bisect repositories located outside the working directory (e.g., the current user's existing checkouts like `emscripten`, `llvm-project`, `binaryen`, `emsdk`), construct on-demand worktrees inside `{resolved_item_dir}`:
+`git -C ../<repo> worktree add --detach {resolved_item_dir}/<repo>_worktree HEAD`
 
 ### CRITICAL SAFETY GUIDELINES (READ-ONLY)
 1. **NEVER push anything to GitHub** (`git push`, `gh issue comment`, `gh issue close`, etc., are strictly forbidden).
@@ -495,6 +518,7 @@ def wait_for_pending_subagents(
         for item_key, result_file in remaining.items():
             if result_file.exists():
                 logging.info(f"Sub-agent finished investigation for {item_key}.")
+                cleanup_item_worktrees(result_file.parent)
                 finished_keys.append(item_key)
 
         for item_key in finished_keys:
@@ -562,10 +586,10 @@ def process_item(
     should_force = force or reinvestigate
     if not should_force:
         if existing_status == "completed":
-            logging.info(f"Skipping {item_key} (already completed).")
+            logging.debug(f"Skipping {item_key} (already completed).")
             return False, None
         if existing_status in ("failed", "timeout") and not retry_failed:
-            logging.info(f"Skipping {item_key} (previously {existing_status}; use --retry-failed to re-run).")
+            logging.debug(f"Skipping {item_key} (previously {existing_status}; use --retry-failed to re-run).")
             return False, None
 
     item_dir = output_dir / repo_short / item_type / str(number)
@@ -771,6 +795,7 @@ def main() -> int:
         for repo in repos:
             for itype in item_types:
                 processed_in_type = 0
+                skipped_in_type = 0
                 fetch_batch_size = max(100, args.limit * 10) if args.limit > 0 else 0
                 items = fetch_items(repo, itype, fetch_batch_size)
                 for item in items:
@@ -788,6 +813,7 @@ def main() -> int:
                                 logging.info(
                                     f"Sub-agent finished investigation for {item_key}."
                                 )
+                                cleanup_item_worktrees(result_file.parent)
                                 finished_keys.append(item_key)
 
                         for item_key in finished_keys:
@@ -798,6 +824,20 @@ def main() -> int:
                             time.sleep(3)
 
                     is_reinvestigate = item.get("number") in reinvestigate_nums
+                    repo_short = get_short_repo_name(repo)
+                    item_key = f"{repo_short}:{itype}:{item.get('number')}"
+                    existing = status_data["items"].get(item_key, {})
+                    existing_status = existing.get("status")
+                    should_force = args.force or is_reinvestigate
+                    will_process = should_force or (
+                        existing_status != "completed"
+                        and (existing_status not in ("failed", "timeout") or args.retry_failed)
+                    )
+
+                    if will_process and skipped_in_type > 0:
+                        logging.info(f"Skipped {skipped_in_type} already completed/investigated issue(s).")
+                        skipped_in_type = 0
+
                     did_process, pending_file = process_item(
                         item=item,
                         repo=repo,
@@ -814,10 +854,16 @@ def main() -> int:
                     if did_process:
                         processed_any = True
                         processed_in_type += 1
+                    else:
+                        skipped_in_type += 1
+
                     if pending_file:
                         repo_short = get_short_repo_name(repo)
                         item_key = f"{repo_short}:{itype}:{item.get('number')}"
                         pending_subagents[item_key] = pending_file
+
+                if skipped_in_type > 0:
+                    logging.info(f"Skipped {skipped_in_type} already completed/investigated issue(s).")
 
         if pending_subagents and not args.no_wait:
             wait_for_pending_subagents(
