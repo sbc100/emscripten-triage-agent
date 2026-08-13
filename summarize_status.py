@@ -15,6 +15,13 @@ from typing import Any, Dict, List
 CERTAINTY_RANKS = {"high": 3, "medium": 2, "low": 1, "unknown": 0}
 
 
+def normalize_certainty(cert: Any) -> str:
+    """Safely convert any certainty representation (int, float, str) to standard high/medium/low/unknown string."""
+    if isinstance(cert, (int, float)):
+        return "high" if cert >= 4 else ("medium" if cert >= 2 else "low")
+    return str(cert or "unknown").lower()
+
+
 def sync_results(status_path: Path, data: Dict[str, Any]) -> bool:
     """Scan item directories for result.json files and update data if new findings exist."""
     updated = False
@@ -33,25 +40,26 @@ def sync_results(status_path: Path, data: Dict[str, Any]) -> bool:
                 with open(result_file, "r", encoding="utf-8") as f:
                     payload = json.load(f)
                 if payload:
-                    rec = payload.get("recommendation") or payload.get("outcome") or "unknown"
+                    rec = str(payload.get("recommendation") or payload.get("outcome") or "unknown").lower()
                     if rec in ("resolved", "fixed"):
                         rec = "close"
                     info["recommendation"] = rec
-                    info["certainty"] = payload.get(
-                        "certainty", "high" if rec != "unknown" else "unknown"
-                    )
+                    cert_val = payload.get("certainty")
+                    if cert_val is None:
+                        cert_val = "high" if rec != "unknown" else "unknown"
+                    info["certainty"] = normalize_certainty(cert_val)
                     info["rationale"] = (
                         payload.get("rationale")
                         or payload.get("summary")
                         or info.get("rationale", "N/A")
                     )
-                    info["actionability"] = payload.get("actionability", "unknown")
+                    info["actionability"] = str(payload.get("actionability", "unknown"))
                     if info.get("status") == "unknown":
                         info["status"] = "completed"
                     updated = True
             except Exception as exc:
                 logging.warning(f"Error loading {result_file}: {exc}")
-        elif info.get("status") in ("completed", "failed", "timeout") and info.get("recommendation") == "unknown":
+        elif info.get("status") in ("completed", "failed", "timeout") and str(info.get("recommendation", "")).lower() == "unknown":
             info["status"] = "timeout"
             info["recommendation"] = "investigate"
             info["certainty"] = "low"
@@ -95,22 +103,22 @@ def filter_items(
     min_rank = CERTAINTY_RANKS.get(min_certainty.lower(), 0)
 
     for item in items.values():
-        if repo and repo not in item.get("repo", ""):
+        if repo and repo not in str(item.get("repo", "")):
             continue
-        if item_type != "both" and item.get("type") != item_type:
+        if item_type != "both" and str(item.get("type", "")) != item_type:
             continue
         if (
             item_status != "all"
-            and item.get("status", "").lower() != item_status.lower()
+            and str(item.get("status", "")).lower() != item_status.lower()
         ):
             continue
         if (
             recommendation != "all"
-            and item.get("recommendation", "").lower() != recommendation.lower()
+            and str(item.get("recommendation", "")).lower() != recommendation.lower()
         ):
             continue
 
-        item_cert = item.get("certainty", "unknown").lower()
+        item_cert = normalize_certainty(item.get("certainty"))
         if CERTAINTY_RANKS.get(item_cert, 0) < min_rank:
             continue
 
@@ -119,9 +127,9 @@ def filter_items(
     # Sort primarily by status, then recommendation, then certainty rank (desc), then number
     filtered.sort(
         key=lambda x: (
-            x.get("status", ""),
-            x.get("recommendation", ""),
-            -CERTAINTY_RANKS.get(x.get("certainty", "unknown").lower(), 0),
+            str(x.get("status", "")),
+            str(x.get("recommendation", "")),
+            -CERTAINTY_RANKS.get(normalize_certainty(x.get("certainty")), 0),
             int(x.get("number", 0)),
         )
     )
