@@ -438,9 +438,8 @@ Your objective is to investigate open {item_type} #{number} ({title}) in `{repo}
 Your assigned working directory for this item is:
 `{resolved_item_dir}`
 
-If you need to checkout or bisect repositories located outside your working directory (e.g., the current user's existing checkouts like `emscripten`, `llvm-project`, `binaryen`, `emsdk`), construct on-demand worktrees directly inside your working directory `{resolved_item_dir}` using `--detach` mode:
+If you need to checkout or bisect repositories located outside your working directory (e.g., the current user's existing checkouts like `emscripten`, `llvm-project`, `binaryen`, `emsdk`), construct on-demand worktrees directly inside your working directory `{resolved_item_dir}` using `--detach` mode (NEVER use `-b` to create named branches):
 `git -C ../<repo> worktree add --detach {resolved_item_dir}/<repo> HEAD`
-(If a named branch is specifically required, use `-b triage-{item_type}-{number}`).
 
 ### CRITICAL SAFETY GUIDELINES (READ-ONLY)
 1. **NEVER push anything to GitHub** (`git push`, `gh issue comment`, `gh issue close`, etc., are strictly forbidden).

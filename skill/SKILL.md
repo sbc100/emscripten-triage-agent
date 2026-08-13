@@ -63,15 +63,12 @@ If an issue reproduced on an older release but works on `main` (meaning it was f
 If your investigation requires checking out specific commits, bisecting, or editing code in shared repositories located outside the working directory (e.g., the current user's existing checkouts like `emscripten`, `llvm-project`, `binaryen`, `emsdk`):
 - **CRITICAL LOCATION RULE**: You are spawned in a fresh dedicated working directory for your item (`issues/<repo>/<type>/<number>/`). **All worktrees MUST be created directly inside your current working directory (`$PWD` or `./`)!**
 - **NEVER run `git checkout` or `git bisect` directly inside shared parent checkouts** (`../<repo>`).
-- **Construct an on-demand worktree inside `$PWD`**:
+- **MANDATORY DETACHED WORKTREES**: Always use `--detach` so no named branches are ever created in `git branch`:
   ```bash
   # Format: git -C ../<repo> worktree add --detach $PWD/<repo> HEAD
   git -C ../emscripten worktree add --detach $PWD/emscripten HEAD
   ```
-- If a named branch is specifically needed, use `-b triage-<type>-<number>` (e.g., `-b triage-issue-1675`):
-  ```bash
-  git -C ../emscripten worktree add -b triage-issue-1675 $PWD/emscripten HEAD
-  ```
+- **DO NOT create named branches** (do NOT use `-b`). Worktrees must always remain in a detached HEAD state.
 - Perform all testing, bisection, or building inside `$PWD/<repo>`.
 - Clean up your worktree when finished:
   ```bash
