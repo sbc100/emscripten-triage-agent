@@ -115,8 +115,6 @@ def sync_results(output_dir: Path, status_data: Dict[str, Any]) -> bool:
     updated = False
     items = status_data.get("items", {})
     for item_key, info in items.items():
-        if info.get("recommendation") != "unknown":
-            continue
         repo_short = get_short_repo_name(info.get("repo", ""))
         itype = info.get("type", "")
         num = info.get("number")
@@ -128,13 +126,31 @@ def sync_results(output_dir: Path, status_data: Dict[str, Any]) -> bool:
                 with open(result_file, "r", encoding="utf-8") as f:
                     payload = json.load(f)
                 if payload:
-                    info["recommendation"] = payload.get("recommendation", "unknown")
-                    info["certainty"] = payload.get("certainty", "unknown")
-                    info["rationale"] = payload.get("rationale") or info.get("rationale", "N/A")
+                    rec = payload.get("recommendation") or payload.get("outcome") or "unknown"
+                    if rec in ("resolved", "fixed"):
+                        rec = "close"
+                    info["recommendation"] = rec
+                    info["certainty"] = payload.get(
+                        "certainty", "high" if rec != "unknown" else "unknown"
+                    )
+                    info["rationale"] = (
+                        payload.get("rationale")
+                        or payload.get("summary")
+                        or info.get("rationale", "N/A")
+                    )
                     info["actionability"] = payload.get("actionability", "unknown")
+                    if info.get("status") == "unknown":
+                        info["status"] = "completed"
                     updated = True
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning(f"Error loading {result_file}: {exc}")
+        elif info.get("status") in ("completed", "failed", "timeout") and info.get("recommendation") == "unknown":
+            info["status"] = "timeout"
+            info["recommendation"] = "investigate"
+            info["certainty"] = "low"
+            info["rationale"] = "Investigation timed out."
+            updated = True
+
     if updated:
         save_status(output_dir, status_data)
     return updated
@@ -316,7 +332,8 @@ def cleanup_item_worktrees(item_dir: Path) -> None:
     """Clean up any on-demand git worktrees created inside the item directory."""
     if not item_dir.exists():
         return
-    for path in item_dir.glob("*worktree*"):
+    matched_dirs = set(item_dir.glob("triage-*")).union(set(item_dir.glob("*worktree*")))
+    for path in matched_dirs:
         if path.is_dir():
             try:
                 run_command(["git", "worktree", "remove", "--force", str(path)], check=False)
@@ -333,6 +350,8 @@ def build_subagent_prompt(
     item_type: str,
     item_dir: Path,
     skill_dir: Path,
+    fast_mode: bool = False,
+    timeout: int = 600,
 ) -> str:
     """Build detailed instructions for the triage sub-agent."""
     number = item.get("number")
@@ -346,6 +365,15 @@ def build_subagent_prompt(
     investigation_path = (item_dir / "investigation.md").resolve()
     resolved_item_dir = item_dir.resolve()
 
+    fast_instructions = ""
+    if fast_mode:
+        fast_instructions = f"""
+### FAST TRIAGE MODE ACTIVE
+You are running in **FAST TRIAGE MODE** with a strict timeout budget of {format_duration(timeout)}.
+- Focus on identifying low-hanging fruit quickly (e.g. non-actionable reports, stale/deprecated features, simple documentation questions).
+- Do NOT spend time on long builds or deep bisection runs. If an issue requires a lengthy setup or reproduction, record your initial observations and output `"recommendation": "investigate"`, `"certainty": "low"` (noting that a deeper pass is required).
+"""
+
     prompt = f"""You are a specialized Emscripten triage and reproduction agent.
 Your objective is to investigate open {item_type} #{number} ({title}) in `{repo}`.
 
@@ -356,13 +384,14 @@ Your objective is to investigate open {item_type} #{number} ({title}) in `{repo}
 - **Created At**: {created_at}
 - **Description / Body**:
 {body}
-
+{fast_instructions}
 ### DEDICATED ISOLATED WORKSPACE
 Your assigned working directory for this item is:
 `{resolved_item_dir}`
 
-If you need to checkout or bisect repositories located outside the working directory (e.g., the current user's existing checkouts like `emscripten`, `llvm-project`, `binaryen`, `emsdk`), construct on-demand worktrees inside `{resolved_item_dir}`:
-`git -C ../<repo> worktree add --detach {resolved_item_dir}/<repo>_worktree HEAD`
+If you need to checkout or bisect repositories located outside your working directory (e.g., the current user's existing checkouts like `emscripten`, `llvm-project`, `binaryen`, `emsdk`), construct on-demand worktrees directly inside your working directory `{resolved_item_dir}` using `--detach` mode:
+`git -C ../<repo> worktree add --detach {resolved_item_dir}/<repo> HEAD`
+(If a named branch is specifically required, use `-b triage-{item_type}-{number}`).
 
 ### CRITICAL SAFETY GUIDELINES (READ-ONLY)
 1. **NEVER push anything to GitHub** (`git push`, `gh issue comment`, `gh issue close`, etc., are strictly forbidden).
@@ -473,7 +502,7 @@ def spawn_subagent(
     max_retries = 3
     for attempt in range(1, max_retries + 1):
         try:
-            proc = run_command(cmd, check=False, timeout=timeout)
+            proc = run_command(cmd, check=False, timeout=timeout, cwd=item_dir)
             if proc.stdout and ("conversationId" in proc.stdout or "newConversation" in proc.stdout):
                 return {"status": "completed", "error": None}
             if proc.returncode == 0:
@@ -493,7 +522,18 @@ def spawn_subagent(
                     "error": err_msg,
                 }
         except subprocess.TimeoutExpired:
-            return {"status": "timeout", "error": f"Timed out after {timeout}s"}
+            return {"status": "timeout", "error": f"Timed out after {format_duration(timeout)}"}
+
+
+def format_duration(seconds: int) -> str:
+    """Format seconds into human readable duration string (e.g. 30m0s, 1h5m0s)."""
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours}h{minutes}m{secs}s"
+    return f"{minutes}m{secs}s"
 
 
 def wait_for_pending_subagents(
@@ -507,7 +547,7 @@ def wait_for_pending_subagents(
         return
 
     logging.info(
-        f"Waiting for {len(pending_items)} sub-agent(s) to complete investigations (timeout: {timeout}s)..."
+        f"Waiting for {len(pending_items)} sub-agent(s) to complete investigations (timeout: {format_duration(timeout)})..."
     )
     start_time = time.time()
     poll_interval = 5
@@ -535,6 +575,19 @@ def wait_for_pending_subagents(
         logging.warning(
             f"Timed out waiting for {len(remaining)} sub-agent(s): {', '.join(remaining.keys())}"
         )
+        for item_key in remaining.keys():
+            if item_key in status_data.get("items", {}):
+                item_entry = status_data["items"][item_key]
+                item_entry["status"] = "timeout"
+                item_entry["recommendation"] = "investigate"
+                item_entry["certainty"] = "low"
+                item_entry["rationale"] = f"Investigation timed out after {format_duration(timeout)}."
+                repo_short = get_short_repo_name(item_entry.get("repo", ""))
+                itype = item_entry.get("type", "")
+                num = item_entry.get("number")
+                if repo_short and itype and num:
+                    cleanup_item_worktrees(output_dir / repo_short / itype / str(num))
+        save_status(output_dir, status_data)
     else:
         logging.info("All sub-agents completed successfully.")
 
@@ -573,6 +626,7 @@ def process_item(
     retry_failed: bool = False,
     force: bool = False,
     reinvestigate: bool = False,
+    fast_mode: bool = False,
 ) -> Tuple[bool, Optional[Path]]:
     """Process a single issue or PR. Returns (did_process, pending_result_file)."""
     number = item.get("number")
@@ -615,7 +669,9 @@ def process_item(
         json.dump(item, f, indent=2)
 
     logging.info(f"\n--- Triaging {item_key}: {title} ---")
-    prompt = build_subagent_prompt(item, repo, item_type, item_dir, skill_dir)
+    prompt = build_subagent_prompt(
+        item, repo, item_type, item_dir, skill_dir, fast_mode=fast_mode, timeout=timeout
+    )
     exec_info = spawn_subagent(
         prompt, item_dir, timeout, f"Triage {item_key}", dry_run=dry_run
     )
@@ -717,12 +773,19 @@ def main() -> int:
     parser.add_argument(
         "--timeout",
         type=int,
-        default=1800,
-        help="Timeout in seconds per sub-agent run (default: 1800)",
+        default=600,
+        help="Timeout in seconds per sub-agent run (default: 600 / 10m)",
+    )
+    parser.add_argument(
+        "--fast",
+        action="store_true",
+        help="Fast triage mode: sets default timeout to 3m (180s) and prioritizes low-hanging fruit",
     )
     parser.add_argument(
         "--retry-failed",
+        "--retry-timeout",
         action="store_true",
+        dest="retry_failed",
         help="Re-process items that previously failed or timed out",
     )
     parser.add_argument(
@@ -770,12 +833,19 @@ def main() -> int:
                 if part.isdigit():
                     reinvestigate_nums.add(int(part))
 
+    if args.fast and args.timeout == 600:
+        args.timeout = 180
+
     repos = args.repos or ["emscripten-core/emscripten"]
     item_types = ["issue", "pr"] if args.type == "both" else [args.type]
 
     logging.info("Starting Emscripten Triage Master Loop.")
     logging.info(f"Target repositories: {', '.join(repos)}")
     logging.info(f"Item types: {', '.join(item_types)}")
+    if args.fast:
+        logging.info(f"FAST TRIAGE MODE active (timeout: {format_duration(args.timeout)}).")
+    else:
+        logging.info(f"Timeout per sub-agent: {format_duration(args.timeout)}.")
 
     while True:
         status_data = load_status(args.output_dir)
@@ -796,7 +866,19 @@ def main() -> int:
             for itype in item_types:
                 processed_in_type = 0
                 skipped_in_type = 0
-                fetch_batch_size = max(100, args.limit * 10) if args.limit > 0 else 0
+                repo_short = get_short_repo_name(repo)
+                completed_count = sum(
+                    1
+                    for k, v in status_data.get("items", {}).items()
+                    if v.get("repo") == repo
+                    and v.get("type") == itype
+                    and v.get("status") == "completed"
+                )
+                fetch_batch_size = (
+                    max(100, completed_count + (args.limit * 2))
+                    if args.limit > 0
+                    else 0
+                )
                 items = fetch_items(repo, itype, fetch_batch_size)
                 for item in items:
                     if args.limit > 0 and processed_in_type >= args.limit:
@@ -850,6 +932,7 @@ def main() -> int:
                         retry_failed=args.retry_failed,
                         force=args.force,
                         reinvestigate=is_reinvestigate,
+                        fast_mode=args.fast,
                     )
                     if did_process:
                         processed_any = True
@@ -877,11 +960,11 @@ def main() -> int:
         if not processed_any:
             logging.info(
                 "No new items to process right now. "
-                f"Sleeping for {args.sleep_interval} seconds..."
+                f"Sleeping for {format_duration(args.sleep_interval)}..."
             )
         else:
             logging.info(
-                f"Completed iteration pass. Pausing {args.sleep_interval}s "
+                f"Completed iteration pass. Pausing {format_duration(args.sleep_interval)} "
                 "before next check..."
             )
         time.sleep(args.sleep_interval)

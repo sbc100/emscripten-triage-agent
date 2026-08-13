@@ -21,8 +21,6 @@ def sync_results(status_path: Path, data: Dict[str, Any]) -> bool:
     output_dir = status_path.parent
     items = data.get("items", {})
     for item_key, info in items.items():
-        if info.get("recommendation") != "unknown":
-            continue
         repo = info.get("repo", "")
         repo_short = repo.split("/")[-1] if "/" in repo else repo
         itype = info.get("type", "")
@@ -35,13 +33,31 @@ def sync_results(status_path: Path, data: Dict[str, Any]) -> bool:
                 with open(result_file, "r", encoding="utf-8") as f:
                     payload = json.load(f)
                 if payload:
-                    info["recommendation"] = payload.get("recommendation", "unknown")
-                    info["certainty"] = payload.get("certainty", "unknown")
-                    info["rationale"] = payload.get("rationale") or info.get("rationale", "N/A")
+                    rec = payload.get("recommendation") or payload.get("outcome") or "unknown"
+                    if rec in ("resolved", "fixed"):
+                        rec = "close"
+                    info["recommendation"] = rec
+                    info["certainty"] = payload.get(
+                        "certainty", "high" if rec != "unknown" else "unknown"
+                    )
+                    info["rationale"] = (
+                        payload.get("rationale")
+                        or payload.get("summary")
+                        or info.get("rationale", "N/A")
+                    )
                     info["actionability"] = payload.get("actionability", "unknown")
+                    if info.get("status") == "unknown":
+                        info["status"] = "completed"
                     updated = True
-            except Exception:
-                pass
+            except Exception as exc:
+                logging.warning(f"Error loading {result_file}: {exc}")
+        elif info.get("status") in ("completed", "failed", "timeout") and info.get("recommendation") == "unknown":
+            info["status"] = "timeout"
+            info["recommendation"] = "investigate"
+            info["certainty"] = "low"
+            info["rationale"] = "Investigation timed out."
+            updated = True
+
     if updated:
         try:
             with open(status_path, "w", encoding="utf-8") as f:
@@ -140,8 +156,11 @@ def print_table(items: List[Dict[str, Any]]) -> None:
         itype = item.get("type", "unknown")[:col_type]
         rec = item.get("recommendation", "unknown")[:col_rec]
         cert = item.get("certainty", "unknown")[:col_cert]
+        status = item.get("status", "")
         rat = (item.get("rationale") or "N/A").replace("\n", " ").strip()
-        if (rat == "N/A" or not rat) and rec == "unknown":
+        if status == "timeout" and (rat == "N/A" or not rat):
+            rat = "(Investigation timed out)"
+        elif (rat == "N/A" or not rat) and rec == "unknown":
             rat = "(Sub-agent investigating...)"
         if len(rat) > col_rat:
             rat = rat[: col_rat - 3] + "..."

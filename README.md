@@ -75,7 +75,9 @@ To run continuously in a loop (e.g., inside a background session or tmux/screen)
 - `--dry-run`: Simulate sub-agent runs without spawning real agents.
 - `--output-dir`, `-o`: Directory to store logs and status files (default: `issues`).
 - `--skill-dir`: Directory containing skill instructions (default: `skill`).
-- `--retry-failed`: Re-run sub-agents on items that previously failed or timed out.
+- `--timeout`: Timeout per sub-agent investigation run (default: `600` / 10m).
+- `--fast`: Fast triage mode: sets timeout to `180` (3m) and prioritizes quick low-hanging fruit.
+- `--retry-failed`, `--retry-timeout`: Re-run sub-agents on items that previously failed or timed out.
 - `--reinvestigate`, `-i`: Specific issue/PR number(s) to force re-investigation on (archives previous run findings).
 - `--force`, `-f`: Force re-processing of items even if previously completed.
 - `--no-wait`: Skip waiting for async sub-agents to finish their investigations.

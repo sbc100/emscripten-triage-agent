@@ -60,15 +60,21 @@ If an issue reproduced on an older release but works on `main` (meaning it was f
 
 ### 4. Multi-Repository Worktree Guidance (On-Demand Isolation)
 If your investigation requires checking out specific commits, bisecting, or editing code in shared repositories located outside the working directory (e.g., the current user's existing checkouts like `emscripten`, `llvm-project`, `binaryen`, `emsdk`):
-- **NEVER run `git checkout` or `git bisect` directly inside shared checkouts** (`../<repo>`).
-- **Construct an on-demand worktree** inside your assigned worktree folder:
+- **CRITICAL LOCATION RULE**: You are spawned in a fresh dedicated working directory for your item (`issues/<repo>/<type>/<number>/`). **All worktrees MUST be created directly inside your current working directory (`$PWD` or `./`)!**
+- **NEVER run `git checkout` or `git bisect` directly inside shared parent checkouts** (`../<repo>`).
+- **Construct an on-demand worktree inside `$PWD`**:
   ```bash
-  git -C ../<repo> worktree add --detach ./<repo>_worktree HEAD
+  # Format: git -C ../<repo> worktree add --detach $PWD/<repo> HEAD
+  git -C ../emscripten worktree add --detach $PWD/emscripten HEAD
   ```
-- Perform all testing, bisection, or building inside `./<repo>_worktree`.
+- If a named branch is specifically needed, use `-b triage-<type>-<number>` (e.g., `-b triage-issue-1675`):
+  ```bash
+  git -C ../emscripten worktree add -b triage-issue-1675 $PWD/emscripten HEAD
+  ```
+- Perform all testing, bisection, or building inside `$PWD/<repo>`.
 - Clean up your worktree when finished:
   ```bash
-  git -C ../<repo> worktree remove --force ./<repo>_worktree
+  git -C ../emscripten worktree remove --force $PWD/emscripten
   ```
 
 ### 5. Writing Final Results
