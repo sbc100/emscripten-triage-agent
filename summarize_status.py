@@ -119,6 +119,7 @@ def print_table(items: List[Dict[str, Any]]) -> None:
         return
 
     # Column widths
+    col_idx = 4
     col_num = 10
     col_type = 6
     col_rec = 14
@@ -126,7 +127,7 @@ def print_table(items: List[Dict[str, Any]]) -> None:
     col_rat = 50
 
     header = (
-        f"{'Item':<{col_num}} | {'Type':<{col_type}} | "
+        f"{'#':<{col_idx}} | {'Item':<{col_num}} | {'Type':<{col_type}} | "
         f"{'Recommendation':<{col_rec}} | {'Certainty':<{col_cert}} | "
         f"{'Rationale':<{col_rat}}"
     )
@@ -134,22 +135,24 @@ def print_table(items: List[Dict[str, Any]]) -> None:
     print(header)
     print(sep)
 
-    for item in items:
+    for idx, item in enumerate(items, 1):
         num = f"#{item.get('number', '?')}"
         itype = item.get("type", "unknown")[:col_type]
         rec = item.get("recommendation", "unknown")[:col_rec]
         cert = item.get("certainty", "unknown")[:col_cert]
         rat = (item.get("rationale") or "N/A").replace("\n", " ").strip()
+        if (rat == "N/A" or not rat) and rec == "unknown":
+            rat = "(Sub-agent investigating...)"
         if len(rat) > col_rat:
             rat = rat[: col_rat - 3] + "..."
         print(
-            f"{num:<{col_num}} | {itype:<{col_type}} | "
+            f"{idx:<{col_idx}} | {num:<{col_num}} | {itype:<{col_type}} | "
             f"{rec:<{col_rec}} | {cert:<{col_cert}} | "
             f"{rat:<{col_rat}}"
         )
 
 
-def print_summary(items: List[Dict[str, Any]]) -> None:
+def print_summary(items: List[Dict[str, Any]], show_history: bool = False) -> None:
     """Print detailed multi-line summaries for each matching item."""
     if not items:
         print("No triaged items match the filter criteria.")
@@ -166,8 +169,16 @@ def print_summary(items: List[Dict[str, Any]]) -> None:
         print(f"URL:            {item.get('url')}")
         print(f"Processed At:   {item.get('processed_at')}")
         print("\nRationale:")
-        print(f"  {item.get('rationale', 'N/A')}\n")
-        print("-" * 72)
+        print(f"  {item.get('rationale', 'N/A')}")
+
+        history = item.get("history", [])
+        if history:
+            print(f"\nPrior Run History ({len(history)} past run(s)):")
+            for run_idx, past in enumerate(history, 1):
+                print(f"  Run #{run_idx} [{past.get('processed_at')}]: Rec={past.get('recommendation')} | Certainty={past.get('certainty')}")
+                print(f"    Rationale: {past.get('rationale')}")
+
+        print("\n" + "-" * 72)
 
 
 def main() -> int:

@@ -384,23 +384,37 @@ def find_agentapi() -> str:
 
 
 def discover_ls_address() -> Optional[str]:
-    """Auto-discover active ANTIGRAVITY_LS_ADDRESS from running processes if not set."""
+    """Auto-discover active ANTIGRAVITY_LS_ADDRESS and related variables from running processes."""
     if "ANTIGRAVITY_LS_ADDRESS" in os.environ and os.environ["ANTIGRAVITY_LS_ADDRESS"]:
         return os.environ["ANTIGRAVITY_LS_ADDRESS"]
     try:
         res = subprocess.run(
-            "grep -z 'ANTIGRAVITY_LS_ADDRESS=' /proc/*/environ 2>/dev/null | tr '\\0' '\\n' | grep -o 'localhost:[0-9]*' | head -n 1",
+            "grep -l -z 'ANTIGRAVITY_LS_ADDRESS=' /proc/*/environ 2>/dev/null | head -n 1",
             shell=True,
             capture_output=True,
             text=True,
         )
-        addr = res.stdout.strip()
-        if addr:
-            os.environ["ANTIGRAVITY_LS_ADDRESS"] = addr
-            logging.info(f"Auto-discovered active Language Server address: {addr}")
-            return addr
-    except Exception:
-        pass
+        pid_env_path = res.stdout.strip()
+        if pid_env_path and os.path.exists(pid_env_path):
+            with open(pid_env_path, "rb") as f:
+                raw_bytes = f.read()
+            for entry in raw_bytes.split(b"\x00"):
+                line = entry.decode("utf-8", errors="ignore")
+                if "=" in line:
+                    k, v = line.split("=", 1)
+                    if k.startswith("ANTIGRAVITY_") and k not in ("ANTIGRAVITY_SOURCE_METADATA", "ANTIGRAVITY_CONVERSATION_ID"):
+                        if v:
+                            os.environ[k] = v
+            if "ANTIGRAVITY_LS_ADDRESS" in os.environ:
+                addr = os.environ["ANTIGRAVITY_LS_ADDRESS"]
+                if "ANTIGRAVITY_PROJECT_ID" not in os.environ:
+                    os.environ["ANTIGRAVITY_PROJECT_ID"] = "default-cli-project"
+                logging.info(f"Auto-discovered active Language Server address: {addr}")
+                return addr
+    except Exception as exc:
+        logging.debug(f"Auto-discovery of Language Server failed: {exc}")
+    if "ANTIGRAVITY_LS_ADDRESS" in os.environ and "ANTIGRAVITY_PROJECT_ID" not in os.environ:
+        os.environ["ANTIGRAVITY_PROJECT_ID"] = "default-cli-project"
     return None
 
 
@@ -516,6 +530,28 @@ def wait_for_pending_subagents(
         logging.info("All sub-agents completed successfully.")
 
 
+def archive_previous_run(item_dir: Path) -> Optional[Path]:
+    """Archive existing result.json and investigation.md into history/ directory."""
+    result_file = item_dir / "result.json"
+    investigation_file = item_dir / "investigation.md"
+    if not (result_file.exists() or investigation_file.exists()):
+        return None
+
+    history_dir = item_dir / "history"
+    history_dir.mkdir(exist_ok=True)
+    timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    run_dir = history_dir / f"run_{timestamp}"
+    run_dir.mkdir(exist_ok=True)
+
+    if result_file.exists():
+        shutil.move(str(result_file), str(run_dir / "result.json"))
+    if investigation_file.exists():
+        shutil.move(str(investigation_file), str(run_dir / "investigation.md"))
+
+    logging.info(f"Archived previous investigation artifacts to {run_dir}")
+    return run_dir
+
+
 def process_item(
     item: Dict[str, Any],
     repo: str,
@@ -527,6 +563,7 @@ def process_item(
     dry_run: bool = False,
     retry_failed: bool = False,
     force: bool = False,
+    reinvestigate: bool = False,
 ) -> Tuple[bool, Optional[Path]]:
     """Process a single issue or PR. Returns (did_process, pending_result_file)."""
     number = item.get("number")
@@ -537,7 +574,8 @@ def process_item(
     # Check existing status
     existing = status_data["items"].get(item_key, {})
     existing_status = existing.get("status")
-    if not force:
+    should_force = force or reinvestigate
+    if not should_force:
         if existing_status == "completed":
             logging.info(f"Skipping {item_key} (already completed).")
             return False, None
@@ -547,6 +585,21 @@ def process_item(
 
     item_dir = output_dir / repo_short / item_type / str(number)
     item_dir.mkdir(parents=True, exist_ok=True)
+
+    # If force or reinvestigate, archive previous run artifacts first
+    if should_force and item_dir.exists():
+        archive_previous_run(item_dir)
+
+    # Preserve history of previous runs in status.json
+    existing_history = list(existing.get("history", []))
+    if existing and existing.get("processed_at") and existing.get("recommendation"):
+        existing_history.append({
+            "processed_at": existing.get("processed_at"),
+            "recommendation": existing.get("recommendation"),
+            "certainty": existing.get("certainty"),
+            "rationale": existing.get("rationale"),
+            "actionability": existing.get("actionability"),
+        })
 
     # Write out raw metadata
     with open(item_dir / "metadata.json", "w", encoding="utf-8") as f:
@@ -580,6 +633,7 @@ def process_item(
         "certainty": result_payload.get("certainty", "unknown"),
         "rationale": result_payload.get("rationale") or exec_info["error"] or "N/A",
         "actionability": result_payload.get("actionability", "unknown"),
+        "history": existing_history,
     }
     status_data["items"][item_key] = status_entry
     save_status(output_dir, status_data)
@@ -661,6 +715,13 @@ def main() -> int:
         help="Re-process items that previously failed or timed out",
     )
     parser.add_argument(
+        "--reinvestigate",
+        "--re-investigate",
+        "-i",
+        nargs="+",
+        help="Specific issue/PR number(s) or comma-separated numbers to force re-investigate (e.g. -i 4952 5774)",
+    )
+    parser.add_argument(
         "--force",
         "-f",
         action="store_true",
@@ -689,6 +750,14 @@ def main() -> int:
         format="%(asctime)s [%(levelname)s] %(message)s",
         datefmt="%H:%M:%S",
     )
+
+    reinvestigate_nums = set()
+    if args.reinvestigate:
+        for arg in args.reinvestigate:
+            for part in str(arg).split(","):
+                part = part.strip("# ").strip()
+                if part.isdigit():
+                    reinvestigate_nums.add(int(part))
 
     repos = args.repos or ["emscripten-core/emscripten"]
     item_types = ["issue", "pr"] if args.type == "both" else [args.type]
@@ -741,6 +810,7 @@ def main() -> int:
                             sync_results(args.output_dir, status_data)
                             time.sleep(3)
 
+                    is_reinvestigate = item.get("number") in reinvestigate_nums
                     did_process, pending_file = process_item(
                         item=item,
                         repo=repo,
@@ -752,6 +822,7 @@ def main() -> int:
                         dry_run=args.dry_run,
                         retry_failed=args.retry_failed,
                         force=args.force,
+                        reinvestigate=is_reinvestigate,
                     )
                     if did_process:
                         processed_any = True

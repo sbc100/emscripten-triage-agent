@@ -76,6 +76,7 @@ To run continuously in a loop (e.g., inside a background session or tmux/screen)
 - `--output-dir`, `-o`: Directory to store logs and status files (default: `issues`).
 - `--skill-dir`: Directory containing skill instructions (default: `skill`).
 - `--retry-failed`: Re-run sub-agents on items that previously failed or timed out.
+- `--reinvestigate`, `-i`: Specific issue/PR number(s) to force re-investigation on (archives previous run findings).
 - `--force`, `-f`: Force re-processing of items even if previously completed.
 - `--no-wait`: Skip waiting for async sub-agents to finish their investigations.
 - `--no-archive-closed`: Disable automatic syncing and archiving of closed items.
