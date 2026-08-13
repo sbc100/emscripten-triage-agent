@@ -110,6 +110,28 @@ def fetch_items(
         return []
 
 
+def fetch_item(repo: str, item_type: str, number: int) -> Optional[Dict[str, Any]]:
+    """Fetch single issue or PR metadata using gh."""
+    subcommand = "issue" if item_type == "issue" else "pr"
+    cmd = [
+        "gh",
+        subcommand,
+        "view",
+        str(number),
+        "--repo",
+        repo,
+        "--json",
+        "number,title,body,createdAt,url,labels",
+    ]
+    res = run_command(cmd, check=False)
+    if res.returncode == 0 and res.stdout:
+        try:
+            return json.loads(res.stdout)
+        except json.JSONDecodeError:
+            return None
+    return None
+
+
 def sync_results(output_dir: Path, status_data: Dict[str, Any]) -> bool:
     """Scan item directories for result.json files and update status_data if new findings exist."""
     updated = False
@@ -844,6 +866,13 @@ def main() -> int:
         help="Re-process items that previously failed or timed out",
     )
     parser.add_argument(
+        "--retry-timeout-only",
+        "--retry-timed-out",
+        action="store_true",
+        dest="retry_timeout_only",
+        help="Re-process ONLY items that previously timed out (loads directly from status.json without GitHub search)",
+    )
+    parser.add_argument(
         "--reinvestigate",
         "--re-investigate",
         "-i",
@@ -930,12 +959,45 @@ def main() -> int:
                     and v.get("type") == itype
                     and v.get("status") == "completed"
                 )
-                fetch_batch_size = (
-                    max(100, completed_count + (args.limit * 2))
-                    if args.limit > 0
-                    else 0
-                )
-                items = fetch_items(repo, itype, fetch_batch_size)
+                if args.retry_timeout_only:
+                    timed_out_keys = [
+                        k
+                        for k, v in status_data.get("items", {}).items()
+                        if v.get("repo") == repo
+                        and v.get("type") == itype
+                        and v.get("status") == "timeout"
+                    ]
+                    items = []
+                    for k in timed_out_keys:
+                        item_entry = status_data["items"][k]
+                        num = item_entry.get("number")
+                        meta_file = (
+                            args.output_dir
+                            / repo_short
+                            / itype
+                            / str(num)
+                            / "metadata.json"
+                        )
+                        if meta_file.exists():
+                            try:
+                                with open(meta_file, "r", encoding="utf-8") as f:
+                                    items.append(json.load(f))
+                            except Exception:
+                                pass
+                        if not any(it.get("number") == num for it in items):
+                            meta = fetch_item(repo, itype, num)
+                            if meta:
+                                items.append(meta)
+                    logging.info(
+                        f"Found {len(items)} timed-out item(s) to retry in {repo}."
+                    )
+                else:
+                    fetch_batch_size = (
+                        max(100, completed_count + (args.limit * 2))
+                        if args.limit > 0
+                        else 0
+                    )
+                    items = fetch_items(repo, itype, fetch_batch_size)
                 for item in items:
                     if args.limit > 0 and processed_in_type >= args.limit:
                         break
@@ -966,10 +1028,13 @@ def main() -> int:
                     item_key = f"{repo_short}:{itype}:{item.get('number')}"
                     existing = status_data["items"].get(item_key, {})
                     existing_status = existing.get("status")
-                    should_force = args.force or is_reinvestigate
+                    should_force = args.force or is_reinvestigate or args.retry_timeout_only
                     will_process = should_force or (
                         existing_status != "completed"
-                        and (existing_status not in ("failed", "timeout") or args.retry_failed)
+                        and (
+                            existing_status not in ("failed", "timeout")
+                            or args.retry_failed
+                        )
                     )
 
                     if will_process and skipped_in_type > 0:
@@ -990,7 +1055,7 @@ def main() -> int:
                         timeout=args.timeout,
                         status_data=status_data,
                         dry_run=args.dry_run,
-                        retry_failed=args.retry_failed,
+                        retry_failed=args.retry_failed or args.retry_timeout_only,
                         force=args.force,
                         reinvestigate=is_reinvestigate,
                         fast_mode=args.fast,
