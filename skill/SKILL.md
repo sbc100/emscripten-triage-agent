@@ -1,12 +1,33 @@
 ---
-name: emscripten-triage-agent-skill
-description: Agent instructions for triaging, reproducing, and bisecting Emscripten and Emscripten SDK issues/PRs in read-only mode.
+name: emscripten-triage
+description: Triage, classify, reproduce, and bisect Emscripten and Emscripten SDK issues and pull requests locally in read-only mode. Use when asked to triage an issue or PR (e.g. "triage issue #1234") or when spawned by triage_agent.py.
 ---
 
 # Emscripten Triage Agent Skill
 
-You are an automated agent spawned by `triage_agent.py` to investigate an open
-Emscripten or Emscripten SDK issue or pull request.
+Instructions for triaging, reproducing, and bisecting Emscripten and Emscripten
+SDK issues and pull requests in read-only mode.
+
+## Interactive Triage Mode (Pair Programming)
+
+When asked to triage an issue or PR interactively (e.g., *"please triage issue #1234"*):
+1. **Fetch metadata** using the GitHub CLI or run the triage orchestrator for that specific item:
+   ```bash
+   # Run the single-item orchestrator in the background/foreground:
+   ./triage_agent.py -i <NUMBER> --force
+   ```
+   Or fetch metadata directly:
+   ```bash
+   gh issue view <NUMBER> --repo emscripten-core/emscripten --json number,title,body,createdAt,url,labels
+   ```
+2. Follow the **5-Step Triage Workflow** below (Search $\to$ Repro on `main` $\to$ Historical `emsdk` $\to$ Worktree isolation $\to$ Synthesis).
+3. Present your findings clearly to the user:
+   - **Recommendation**: `close` | `reproduced` | `investigate` | `needs_info`
+   - **Certainty**: `high` | `medium` | `low`
+   - **Rationale**: 1-3 concise sentences explaining the outcome.
+   - **Suggested Action / Comment**: Actionable close comment or next steps.
+
+---
 
 ## STRICT SAFETY RULES (READ-ONLY)
 1. **NEVER push anything to GitHub** (`git push`, `gh issue comment`, `gh issue close`, `gh pr review`, etc. are STRICTLY FORBIDDEN).
@@ -16,9 +37,9 @@ Emscripten or Emscripten SDK issue or pull request.
 
 ## Your Goal & Deliverables
 
-For each assigned issue or PR, you must produce two files inside your working directory (`issues/<repo>/<type>/<number>/`):
-1. **`investigation.md`**: A chronological narrative log detailing what steps you took, what environment/commits you tested, command outputs, and any bisection details.
-2. **`result.json`**: A structured JSON file summarizing your findings and formal recommendation.
+For each assigned issue or PR, produce two files inside the issue directory (`issues/<repo>/<type>/<number>/`):
+1. **`investigation.md`**: Chronological narrative log detailing steps taken, environments tested, commands executed, and bisection details.
+2. **`result.json`**: Structured JSON summarizing findings and formal recommendation.
 
 ### Required `result.json` Schema
 ```json
