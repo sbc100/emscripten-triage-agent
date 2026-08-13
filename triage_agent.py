@@ -431,6 +431,7 @@ Your objective is to investigate open {item_type} #{number} ({title}) in `{repo}
 - **Title**: {title}
 - **URL**: {url}
 - **Created At**: {created_at}
+- **Time Budget**: {format_duration(timeout)}
 - **Description / Body**:
 {body}
 {fast_instructions}

@@ -1,11 +1,11 @@
 ---
 name: emscripten-triage-agent-skill
-description: Sub-agent instructions for triaging, reproducing, and bisecting Emscripten and Emscripten SDK issues/PRs in read-only mode.
+description: Agent instructions for triaging, reproducing, and bisecting Emscripten and Emscripten SDK issues/PRs in read-only mode.
 ---
 
-# Emscripten Triage Sub-Agent Skill
+# Emscripten Triage Agent Skill
 
-You are an automated sub-agent spawned by `triage_loop.py` to investigate an open
+You are an automated agent spawned by `triage_agent.py` to investigate an open
 Emscripten or Emscripten SDK issue or pull request.
 
 ## STRICT SAFETY RULES (READ-ONLY)
@@ -35,32 +35,69 @@ For each assigned issue or PR, you must produce two files inside your working di
 }
 ```
 
+## Recommended Time-Boxing Strategy
+
+Be mindful of your assigned **Time Budget** passed in your prompt:
+- **Phase 1 (Search & Classification)**: 1 minute.
+- **Phase 2 (Reproduction on `main`)**: 2 minutes.
+- **Phase 3 (Historical Version via `emsdk`)**: 2–3 minutes.
+- **Phase 4 (Final Synthesis)**: 1 minute.
+
+---
+
 ## Triage Workflow
 
-### 1. Initial Classification
-Before attempting expensive reproductions, analyze the item based on:
-- **Actionability**: Does the issue provide clear steps to reproduce, sample code, or error logs?
-- **Staleness / Deprecation**: Does it concern deprecated features (`fastcomp`, `asm.js`, Python 2, old unsupported Node versions)? See `references/classification.md`.
-- **Version**: What version of Emscripten/emsdk was reported (e.g., `1.38.30`, `2.0.10`, `3.1.50`)?
+### 1. Fast-Path Code, Doc & Commit Search (0–60 Seconds)
+Before attempting expensive builds or reproductions, search the existing codebase and commit history to see if the issue is already answered, documented, or resolved:
+- **Documentation Search**: Check `../emscripten/site/source/docs/` or user manual:
+  ```bash
+  git -C ../emscripten grep -i "<symbol_or_keyword>" site/source/
+  ```
+- **Codebase Search**: Check whether a setting, function, or flag exists:
+  ```bash
+  git -C ../emscripten grep "<setting_or_function>" src/ tools/
+  ```
+- **Commit History Search**: Check if a fix was committed recently:
+  ```bash
+  git -C ../emscripten log --grep="<keyword_or_issue_number>" --oneline -n 20
+  git -C ../emscripten log -S "<symbol>" --oneline -n 20
+  ```
 
-If an issue is completely non-actionable (`actionability: "low"`) or purely about deprecated unsupported features, set `"recommendation": "close"`, provide your clear `"rationale"`, and write out `result.json`.
+#### Early-Exit Triggers:
+- **Deprecated / Obsolete Features**: If the issue concerns `fastcomp`, `asm.js`, Python 2, or legacy Node versions, exit immediately with `"recommendation": "close"`, `"certainty": "high"`.
+- **Usage / Documentation Questions**: If the user is asking how to do something and the docs or tests demonstrate it, cite the docs/test and recommend `"close"`.
+- **Non-Actionable Ancient Reports**: If an issue is $> 2$ years old with no reproduction code, sample files, or logs, mark `"recommendation": "close"`, `"actionability": "low"`, `"certainty": "medium"`.
 
-### 2. Reproduction Phase
+### 2. Reproduction Phase (Test on `main` First)
 When an issue has actionable reproduction steps or sample code:
-- **Test on `main` First**: Check out or use the latest `main` branch of `emscripten` / `binaryen` / `llvm` to see if the issue reproduces today.
-- **Test on Reported Version**: If the issue does NOT reproduce on `main`, or if you need to confirm the regression, use `emsdk` to install and activate the exact historical version reported by the user (e.g., `emsdk install 2.0.10 && emsdk activate 2.0.10`).
-- **Creating the Test Case**:
-  - Prefer creating a standalone `.c` or `.cpp` reproduction file in a temporary scratch space inside your issue folder or `/tmp`.
-  - Compile with `emcc` using the exact flags reported in the issue.
-- **Time-Boxing**: Limit reproduction attempts so you do not spin in an infinite loop.
+- **Direct Compilation on `main`**: Use the active system `emcc` in your PATH directly. Create a scratch test file (`repro.c` / `repro.cpp`) in `$PWD` and compile.
+  - *Tip: Do NOT create a git worktree just to test compilation on `main`.*
+- **If It Reproduces on `main`**:
+  - The bug is confirmed on current `main`. Mark `"recommendation": "reproduced"`, `"certainty": "high"`, `"reproduced_on_main": true`.
+  - Record findings in `investigation.md` and conclude. (Do not spend extra time bisecting unless specifically required).
 
-### 3. Bisection Phase (For Confirmed Regressions)
-If an issue reproduced on an older release but works on `main` (meaning it was fixed), or if it worked on an older release and fails on `main` (meaning it is a regression):
-- See `references/bisection.md` for exact instructions on using `emsdk` and binary releases to bisect across tags in `emscripten-releases-tags.json`.
-- Once the release range is narrowed, determine whether the change originated in `emscripten`, `llvm-project`, or `binaryen`.
+### 3. Historical Reproduction & Bisection via `emsdk`
+If the issue does NOT reproduce on `main` (suggesting it was fixed), or if you need to confirm that an older release was broken:
+- **Use Pre-Built Binaries (`emsdk`)**:
+  ```bash
+  emsdk install <reported_version>
+  emsdk activate <reported_version>
+  source ./emsdk_env.sh
+  emcc repro.c -o repro.js [FLAGS]
+  ```
+- **CRITICAL SOURCE BUILD RULE**:
+  - **If your timeout budget is less than 30 minutes, NEVER attempt full source builds of LLVM, Binaryen, or Emscripten (`cmake`, `ninja`, etc.)**.
+  - Always use pre-compiled binary packages via `emsdk install <version_or_hash>`.
+- **Pinpoint Resolving Commit / PR**:
+  - If verified broken on `<reported_version>` but working on `main`, search the commit log for the fix:
+    ```bash
+    git -C ../emscripten log -S "<symbol>" --oneline
+    git -C ../emscripten log --grep="<keyword>" --oneline
+    ```
+  - Cite the resolving PR/commit in `rationale` and `suggested_close_comment`.
 
 ### 4. Multi-Repository Worktree Guidance (On-Demand Isolation)
-If your investigation requires checking out specific commits, bisecting, or editing code in shared repositories located outside the working directory (e.g., the current user's existing checkouts like `emscripten`, `llvm-project`, `binaryen`, `emsdk`):
+Only construct a git worktree if you need to check out a specific older Git commit or make a local test patch:
 - **CRITICAL LOCATION RULE**: You are spawned in a fresh dedicated working directory for your item (`issues/<repo>/<type>/<number>/`). **All worktrees MUST be created directly inside your current working directory (`$PWD` or `./`)!**
 - **NEVER run `git checkout` or `git bisect` directly inside shared parent checkouts** (`../<repo>`).
 - **MANDATORY DETACHED WORKTREES**: Always use `--detach` so no named branches are ever created in `git branch`:
