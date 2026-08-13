@@ -1,13 +1,13 @@
 # Emscripten Triage Agent
 
-A deterministic master loop and sub-agent orchestration repository for triaging
+A deterministic master loop and agent orchestration repository for triaging
 open issues and pull requests across `emscripten-core/emscripten` and
 `emscripten-core/emsdk`.
 
 ## Overview
 
 The triage agent is designed to run continuously, starting from the oldest
-open issues and pull requests, and spawning specialized sub-agents to:
+open issues and pull requests, and spawning specialized agents to:
 1. Classify issues (actionability, staleness, feature relevance).
 2. Check out historical `emsdk`, `emscripten`, `binaryen`, and `llvm` toolchains
    to attempt exact bug reproductions.
@@ -15,7 +15,7 @@ open issues and pull requests, and spawning specialized sub-agents to:
 4. Provide structured, evidence-based recommendations on whether issues should
    be closed, along with certainty scores and clear rationales.
 
-**IMPORTANT SAFETY GUARANTEE**: All triage scripts and sub-agents operate in a
+**IMPORTANT SAFETY GUARANTEE**: All triage scripts and agents operate in a
 **read-only** mode with respect to GitHub (`gh`). Nothing is ever pushed back
 upstream, nor are any comments or modifications made to live issues or PRs. All
 investigation logs, reproduction artifacts, and state summaries are recorded locally.
@@ -27,8 +27,8 @@ emscripten-triage-agent/
 ├── README.md               # This documentation
 ├── triage_loop.py          # Master loop script for fetching items and spawning agents
 ├── summarize_status.py     # Utility to filter, view, and report on triaged items
-├── skill/                  # Instructions and reference material for sub-agents
-│   ├── SKILL.md            # Main sub-agent skill guide and reproduction workflow
+├── skill/                  # Instructions and reference material for agents
+│   ├── SKILL.md            # Main agent skill guide and reproduction workflow
 │   └── references/
 │       ├── bisection.md    # Guide for binary/source bisection across toolchains
 │       └── classification.md # Heuristics for classifying issues and closing criteria
@@ -47,7 +47,7 @@ emscripten-triage-agent/
 Ensure you have the following installed and available in your `PATH`:
 - `python3` (>= 3.9)
 - `gh` (GitHub CLI, authenticated with read access)
-- `agentapi` CLI (for spawning sub-agents)
+- `agentapi` CLI (for spawning agents)
 
 ### Running the Master Loop
 
@@ -69,18 +69,18 @@ To run continuously in a loop (e.g., inside a background session or tmux/screen)
   Can specify multiple times for multiple repos.
 - `--type`: Item type (`issue`, `pr`, or `both`; default: `issue`).
 - `--limit`, `-l`: Maximum number of unprocessed items to process per pass (default: `10`).
-- `--concurrency`, `-j`: Maximum number of parallel sub-agents to run concurrently (default: `5`).
+- `--concurrency`, `-j`: Maximum number of parallel agents to run concurrently (default: `5`).
 - `--loop`: Run continuously in an infinite loop until stopped.
 - `--sleep-interval`: Seconds to pause between loop iterations (default: `300`).
-- `--dry-run`: Simulate sub-agent runs without spawning real agents.
+- `--dry-run`: Simulate agent runs without spawning real agents.
 - `--output-dir`, `-o`: Directory to store logs and status files (default: `issues`).
 - `--skill-dir`: Directory containing skill instructions (default: `skill`).
-- `--timeout`: Timeout per sub-agent investigation run (default: `600` / 10m).
+- `--timeout`: Timeout per agent investigation run (default: `600` / 10m).
 - `--fast`: Fast triage mode: sets timeout to `180` (3m) and prioritizes quick low-hanging fruit.
-- `--retry-failed`, `--retry-timeout`: Re-run sub-agents on items that previously failed or timed out.
+- `--retry-failed`, `--retry-timeout`: Re-run agents on items that previously failed or timed out.
 - `--reinvestigate`, `-i`: Specific issue/PR number(s) to force re-investigation on (archives previous run findings).
 - `--force`, `-f`: Force re-processing of items even if previously completed.
-- `--no-wait`: Skip waiting for async sub-agents to finish their investigations.
+- `--no-wait`: Skip waiting for async agents to finish their investigations.
 - `--no-archive-closed`: Disable automatic syncing and archiving of closed items.
 
 #### Automatic Archiving of Closed Items
@@ -104,14 +104,14 @@ and certainty:
 ./summarize_status.py --format table
 ```
 
-## Sub-Agent Workflow & Output Structure
+## Agent Workflow & Output Structure
 
 For every item processed, a directory is created at:
 `issues/<repo_short_name>/<type>/<number>/` (e.g., `issues/emscripten/issue/1234/`).
 
 Each folder contains:
 1. `metadata.json`: Raw GitHub metadata (title, body, labels, creation date).
-2. `investigation.md`: Multi-step narrative log produced by the sub-agent detailing
+2. `investigation.md`: Multi-step narrative log produced by the agent detailing
    environment setup, reproduction attempts, and logs.
 3. `result.json`: Structured outcome of the triage investigation conforming to:
 
