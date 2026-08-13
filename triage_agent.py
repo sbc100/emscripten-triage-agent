@@ -329,19 +329,68 @@ def archive_closed_items(
 
 
 def cleanup_item_worktrees(item_dir: Path) -> None:
-    """Clean up any on-demand git worktrees created inside the item directory."""
+    """Clean up any on-demand git worktrees created inside the item directory and delete associated branches."""
     if not item_dir.exists():
         return
+
+    parent_repos: set[Path] = set()
+    branches_to_delete: list[str] = []
+
     matched_dirs = set(item_dir.glob("triage-*")).union(set(item_dir.glob("*worktree*")))
+    for child in item_dir.iterdir():
+        if child.is_dir() and (child / ".git").exists():
+            matched_dirs.add(child)
+
     for path in matched_dirs:
         if path.is_dir():
             try:
-                run_command(["git", "worktree", "remove", "--force", str(path)], check=False)
+                res = run_command(
+                    ["git", "-C", str(path), "branch", "--show-current"], check=False
+                )
+                branch = res.stdout.strip() if res.returncode == 0 else ""
+                if branch and branch not in ("main", "master", "HEAD"):
+                    branches_to_delete.append(branch)
+
+                gitdir_file = path / ".git"
+                if gitdir_file.is_file():
+                    content = gitdir_file.read_text()
+                    if "gitdir:" in content:
+                        git_target = content.split("gitdir:", 1)[1].strip()
+                        repo_dir = Path(git_target).resolve().parent.parent.parent
+                        if repo_dir.exists():
+                            parent_repos.add(repo_dir)
+
+                run_command(
+                    ["git", "worktree", "remove", "--force", str(path)], check=False
+                )
                 if path.exists():
                     shutil.rmtree(path, ignore_errors=True)
             except Exception as exc:
                 logging.warning(f"Error cleaning up worktree at {path}: {exc}")
-    run_command(["git", "worktree", "prune"], check=False)
+
+    # Fallback to standard parent checkout paths if not auto-discovered
+    for repo_name in ["emscripten", "llvm-project", "binaryen", "emsdk"]:
+        candidate = (item_dir.parent.parent.parent / repo_name).resolve()
+        if candidate.exists() and (candidate / ".git").exists():
+            parent_repos.add(candidate)
+
+    # Delete branches and prune worktrees in parent repos
+    for repo in parent_repos:
+        run_command(["git", "-C", str(repo), "worktree", "prune"], check=False)
+        for branch in branches_to_delete:
+            run_command(["git", "-C", str(repo), "branch", "-D", branch], check=False)
+
+        res = run_command(
+            ["git", "-C", str(repo), "branch", "--list", "triage-*", "issue-*", "pr-*"],
+            check=False,
+        )
+        if res.returncode == 0 and res.stdout:
+            for b in res.stdout.splitlines():
+                b_name = b.strip("* ").strip()
+                if b_name and b_name not in ("main", "master"):
+                    run_command(
+                        ["git", "-C", str(repo), "branch", "-D", b_name], check=False
+                    )
 
 
 def build_subagent_prompt(
