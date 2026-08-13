@@ -430,22 +430,7 @@ def spawn_subagent(
 
     if dry_run:
         logging.info(f"[DRY-RUN] Would spawn subagent for: {title}")
-        mock_result = {
-            "status": "completed",
-            "recommendation": "investigate",
-            "certainty": "low",
-            "rationale": "Dry-run mode generated mock result.",
-            "actionability": "medium",
-            "reproduced_on_reported_version": None,
-            "reproduced_on_main": None,
-            "bisected_commit": None,
-            "suggested_close_comment": None,
-        }
-        with open(result_path, "w", encoding="utf-8") as f:
-            json.dump(mock_result, f, indent=2)
-        with open(item_dir / "investigation.md", "w", encoding="utf-8") as f:
-            f.write("# Dry-Run Investigation Log\n\nSimulated triage pass.\n")
-        return {"status": "completed", "error": None}
+        return {"status": "dry_run", "error": None}
 
     if "ANTIGRAVITY_LS_ADDRESS" not in os.environ:
         discover_ls_address()
@@ -610,6 +595,8 @@ def process_item(
     exec_info = spawn_subagent(
         prompt, item_dir, timeout, f"Triage {item_key}", dry_run=dry_run
     )
+    if dry_run:
+        return True, None
 
     result_file = item_dir / "result.json"
     result_payload: Dict[str, Any] = {}
