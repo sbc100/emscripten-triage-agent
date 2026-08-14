@@ -34,6 +34,7 @@ When asked to triage an issue or PR interactively (e.g., *"please triage issue #
 2. **NEVER modify any remote repositories or issues online.**
 3. All work, git checkouts, bisection runs, test scripts, and log outputs must remain strictly on the local filesystem.
 4. **NEVER modify or write files inside parent checkouts** (e.g. `../emscripten`, `../llvm-project`, `../binaryen`, `../emsdk`). ALL file edits (`replace_file_content`, `write_to_file`, scratch files, build artifacts) MUST take place inside your assigned workspace (`$PWD`) or inside an on-demand worktree (`$PWD/<repo>`).
+5. **NEVER RECOMMEND CLOSING BASED ON LOCAL FIXES**: Your job is to evaluate the upstream state of `main`. Never recommend `close/fixed` or `close/implemented` because you authored a local fix or document during your triage run. If a bug or documentation gap still exists on upstream `main`, classify it as `reproduced` or `investigate` with `actionability: high`.
 
 ## Your Goal & Deliverables
 

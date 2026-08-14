@@ -513,6 +513,7 @@ If you need to checkout or bisect repositories located outside your working dire
 2. **NEVER modify live repositories on the internet.**
 3. All work, reproduction tests, and findings must remain local and isolated.
 4. **NEVER modify or write files directly inside parent checkouts** (e.g. `../emscripten`, `../llvm-project`, `../binaryen`, `../emsdk`). ALL file edits (`replace_file_content`, `write_to_file`, scratch files, build artifacts) MUST take place inside your assigned workspace `{resolved_item_dir}` or inside an on-demand worktree (`{resolved_item_dir}/<repo>`).
+5. **NEVER recommend closing an issue based on local fixes or prototype docs you authored**: Evaluate only what is already merged upstream on `main`. If a bug or missing document still exists upstream on `main`, classify as `reproduced` or `investigate`.
 
 ### Instructions & Guidance
 1. Read the triage skill instructions located at `{skill_path}` using file viewing tools.
