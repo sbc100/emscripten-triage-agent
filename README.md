@@ -104,6 +104,29 @@ and certainty:
 ./summarize_status.py --format table
 ```
 
+### Interactively Reviewing & Applying Recommendations
+
+To interactively step through triaged items, review the investigation findings, and approve/edit/apply comments and close actions via `gh`:
+
+```bash
+# Review all items recommended for closing with high certainty
+./apply_recommendations.py --recommendation close --min-certainty high
+
+# Review specific issue numbers
+./apply_recommendations.py -n 4952 7024
+
+# Dry-run mode (print the exact `gh` commands without executing them)
+./apply_recommendations.py --recommendation close --dry-run
+```
+
+During review, the tool presents the bug URL, title, investigation summary, and suggested comment, with interactive options:
+- `[y]`: Apply the proposed action (post comment and close issue if recommended).
+- `[e]`: Edit the draft comment in `$EDITOR` before applying.
+- `[c]`: Post comment only without closing the issue.
+- `[v]`: View the full `investigation.md` narrative from disk.
+- `[s]`: Skip the current item without making changes.
+- `[q]`: Quit the review session.
+
 ## Agent Workflow & Output Structure
 
 For every item processed, a directory is created at:
