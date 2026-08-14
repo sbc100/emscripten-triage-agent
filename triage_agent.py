@@ -644,6 +644,9 @@ def wait_for_pending_subagents(
         for item_key in finished_keys:
             del remaining[item_key]
 
+        if finished_keys and remaining:
+            logging.info(f"Waiting for {len(remaining)} remaining agent(s)...")
+
         if remaining:
             sync_results(output_dir, status_data)
             time.sleep(poll_interval)
@@ -1016,6 +1019,11 @@ def main() -> int:
 
                         for item_key in finished_keys:
                             del pending_subagents[item_key]
+
+                        if finished_keys and pending_subagents:
+                            logging.info(
+                                f"Waiting for {len(pending_subagents)} remaining agent(s)..."
+                            )
 
                         if len(pending_subagents) >= args.concurrency:
                             sync_results(args.output_dir, status_data)
