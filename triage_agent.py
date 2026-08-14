@@ -725,8 +725,8 @@ def process_item(
     item_dir = output_dir / repo_short / item_type / str(number)
     item_dir.mkdir(parents=True, exist_ok=True)
 
-    # If force or reinvestigate, archive previous run artifacts first
-    if should_force and item_dir.exists():
+    # Always archive previous run artifacts before launching a new investigation run
+    if not dry_run:
         archive_previous_run(item_dir)
 
     # Preserve history of previous runs in status.json
@@ -756,13 +756,6 @@ def process_item(
         return True, None
 
     result_file = item_dir / "result.json"
-    result_payload: Dict[str, Any] = {}
-    if result_file.exists():
-        try:
-            with open(result_file, "r", encoding="utf-8") as f:
-                result_payload = json.load(f)
-        except Exception as exc:
-            logging.warning(f"Failed to read sub-agent result.json: {exc}")
 
     # Update top-level status tracker
     status_entry = {
@@ -773,16 +766,16 @@ def process_item(
         "url": item.get("url"),
         "status": exec_info["status"],
         "processed_at": datetime.datetime.now().isoformat(),
-        "recommendation": result_payload.get("recommendation", "unknown"),
-        "certainty": result_payload.get("certainty", "unknown"),
-        "rationale": result_payload.get("rationale") or exec_info["error"] or "N/A",
-        "actionability": result_payload.get("actionability", "unknown"),
+        "recommendation": "unknown",
+        "certainty": "unknown",
+        "rationale": exec_info["error"] or "Agent investigating...",
+        "actionability": "unknown",
         "history": existing_history,
     }
     status_data["items"][item_key] = status_entry
     save_status(output_dir, status_data)
 
-    pending_path = result_file if (exec_info["status"] == "completed" and not result_file.exists()) else None
+    pending_path = result_file if exec_info["status"] == "completed" else None
     return True, pending_path
 
 
