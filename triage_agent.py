@@ -643,14 +643,23 @@ def spawn_subagent(
 
 def poll_finished_agents(
     pending: Dict[str, Tuple[Path, int]],
+    output_dir: Path,
+    status_data: Dict[str, Any],
     available_slots: Optional[List[int]] = None,
 ) -> List[str]:
-    """Check pending agents for completion, clean up worktrees, and release worker slots."""
+    """Check pending agents for completion, clean up worktrees, sync results immediately, and release worker slots."""
     finished = []
     for item_key, (result_file, aid) in list(pending.items()):
         if result_file.exists():
             prefix = f"Agent[{aid}] " if aid is not None else ""
-            logging.info(f"{prefix}Finished investigation for {item_key}.")
+            rec = "completed"
+            try:
+                with open(result_file, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                rec = data.get("recommendation", "completed")
+            except Exception:
+                pass
+            logging.info(f"{prefix}Finished investigation for {item_key} -> {rec}")
             cleanup_item_worktrees(result_file.parent)
             finished.append(item_key)
             del pending[item_key]
@@ -658,8 +667,10 @@ def poll_finished_agents(
                 available_slots.append(aid)
                 available_slots.sort()
 
-    if finished and pending:
-        logging.info(f"Waiting for {len(pending)} remaining agent(s)...")
+    if finished:
+        sync_results(output_dir, status_data)
+        if pending:
+            logging.info(f"Waiting for {len(pending)} remaining agent(s)...")
     return finished
 
 
@@ -681,9 +692,8 @@ def wait_for_pending_subagents(
     remaining = dict(pending_items)
 
     while remaining and (time.time() - start_time < timeout):
-        poll_finished_agents(remaining)
+        poll_finished_agents(remaining, output_dir, status_data)
         if remaining:
-            sync_results(output_dir, status_data)
             time.sleep(poll_interval)
 
     sync_results(output_dir, status_data)
@@ -1035,9 +1045,13 @@ def main() -> int:
 
                     if will_process:
                         while args.concurrency > 0 and not available_slots:
-                            poll_finished_agents(pending_subagents, available_slots)
+                            poll_finished_agents(
+                                pending_subagents,
+                                args.output_dir,
+                                status_data,
+                                available_slots,
+                            )
                             if not available_slots:
-                                sync_results(args.output_dir, status_data)
                                 time.sleep(3)
 
                         current_agent_id = available_slots.pop(0) if available_slots else 1
