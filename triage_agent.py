@@ -148,13 +148,18 @@ def sync_results(output_dir: Path, status_data: Dict[str, Any]) -> bool:
                 with open(result_file, "r", encoding="utf-8") as f:
                     payload = json.load(f)
                 if payload:
-                    rec = payload.get("recommendation") or payload.get("outcome") or "unknown"
+                    rec = str(payload.get("recommendation") or payload.get("outcome") or "unknown").lower()
                     if rec in ("resolved", "fixed"):
-                        rec = "close"
+                        rec = "close/fixed"
+                    elif rec == "close":
+                        rec = "close/fixed"
                     info["recommendation"] = rec
-                    info["certainty"] = payload.get(
-                        "certainty", "high" if rec != "unknown" else "unknown"
-                    )
+                    cert_val = payload.get("certainty")
+                    if isinstance(cert_val, (int, float)):
+                        cert_val = "high" if cert_val >= 4 else ("medium" if cert_val >= 2 else "low")
+                    elif not cert_val:
+                        cert_val = "high" if rec != "unknown" else "unknown"
+                    info["certainty"] = str(cert_val).lower()
                     info["rationale"] = (
                         payload.get("rationale")
                         or payload.get("summary")
@@ -482,7 +487,7 @@ If you need to checkout or bisect repositories located outside your working dire
 The JSON output at `{result_path}` MUST match this exact schema:
 {{
   "status": "completed",
-  "recommendation": "close | investigate | reproduced | needs_info",
+  "recommendation": "close/fixed | close/invalid | close/duplicate | close/obsolete | close/unreproducible | close/implemented | reproduced | investigate | needs_info",
   "certainty": "high | medium | low",
   "rationale": "Clear 1-3 sentence summary explaining the recommendation and certainty.",
   "actionability": "high | medium | low",

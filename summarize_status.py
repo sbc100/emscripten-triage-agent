@@ -42,7 +42,9 @@ def sync_results(status_path: Path, data: Dict[str, Any]) -> bool:
                 if payload:
                     rec = str(payload.get("recommendation") or payload.get("outcome") or "unknown").lower()
                     if rec in ("resolved", "fixed"):
-                        rec = "close"
+                        rec = "close/fixed"
+                    elif rec == "close":
+                        rec = "close/fixed"
                     info["recommendation"] = rec
                     cert_val = payload.get("certainty")
                     if cert_val is None:
@@ -112,11 +114,14 @@ def filter_items(
             and str(item.get("status", "")).lower() != item_status.lower()
         ):
             continue
-        if (
-            recommendation != "all"
-            and str(item.get("recommendation", "")).lower() != recommendation.lower()
-        ):
-            continue
+        if recommendation != "all":
+            rec_query = recommendation.lower()
+            item_rec = str(item.get("recommendation", "")).lower()
+            if rec_query == "close":
+                if not (item_rec == "close" or item_rec.startswith("close/") or item_rec.startswith("close:")):
+                    continue
+            elif item_rec != rec_query:
+                continue
 
         item_cert = normalize_certainty(item.get("certainty"))
         if CERTAINTY_RANKS.get(item_cert, 0) < min_rank:
@@ -146,7 +151,7 @@ def print_table(items: List[Dict[str, Any]]) -> None:
     col_idx = 4
     col_num = 10
     col_type = 6
-    col_rec = 14
+    col_rec = 20
     col_cert = 10
     col_rat = 50
 
@@ -224,8 +229,7 @@ def main() -> int:
         "--recommendation",
         "-r",
         default="all",
-        choices=["close", "investigate", "reproduced", "needs_info", "unknown", "all"],
-        help="Filter by recommendation (default: all)",
+        help="Filter by recommendation (e.g. close, close/fixed, close/invalid, reproduced, investigate, all; default: all)",
     )
     parser.add_argument(
         "--min-certainty",

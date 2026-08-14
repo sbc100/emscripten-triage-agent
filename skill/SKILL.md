@@ -45,7 +45,7 @@ For each assigned issue or PR, produce two files inside the issue directory (`is
 ```json
 {
   "status": "completed",
-  "recommendation": "close | investigate | reproduced | needs_info",
+  "recommendation": "close/fixed | close/invalid | close/duplicate | close/obsolete | close/unreproducible | close/implemented | reproduced | investigate | needs_info",
   "certainty": "high | medium | low",
   "rationale": "1-3 sentences summarizing why you make this recommendation and why certainty is high/medium/low.",
   "actionability": "high | medium | low",
@@ -55,6 +55,17 @@ For each assigned issue or PR, produce two files inside the issue directory (`is
   "suggested_close_comment": "Draft comment that could be posted later when closing the issue (if applicable)."
 }
 ```
+
+### Granular Recommendation Guide:
+- **`close/fixed`**: Verified resolved/fixed on current `main` (cite resolving PR/commit).
+- **`close/invalid`**: Working as intended, user configuration error, or answered usage question.
+- **`close/duplicate`**: Duplicate of another issue or pull request (cite duplicate `#NNN`).
+- **`close/obsolete`**: Relates to deprecated/removed architectures (`fastcomp`, `asm.js`, Python 2, obsolete runtimes).
+- **`close/unreproducible`**: Non-actionable report with missing info, no repro steps, and unresponsive reporter.
+- **`close/implemented`**: Feature request that has already been implemented in Emscripten.
+- **`reproduced`**: Confirmed ongoing bug that still reproduces on current `main`.
+- **`investigate`**: Valid bug or feature requiring maintainer research (cannot easily reproduce standalone).
+- **`needs_info`**: Needs additional reproduction code or flags from reporter.
 
 ## Recommended Time-Boxing Strategy
 
