@@ -49,6 +49,33 @@ def get_short_repo_name(repo: str) -> str:
     return repo.split("/")[-1] if "/" in repo else repo
 
 
+def format_duration(seconds: int) -> str:
+    """Format seconds into human readable duration string (e.g. 30m0s, 1h5m0s)."""
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes, secs = divmod(seconds, 60)
+    hours, minutes = divmod(minutes, 60)
+    if hours > 0:
+        return f"{hours}h{minutes}m{secs}s"
+    return f"{minutes}m{secs}s"
+
+
+def parse_gh_json(stdout: str) -> Optional[Any]:
+    """Strip ANSI escape sequences and parse JSON output from `gh` CLI."""
+    if not stdout:
+        return None
+    raw = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", stdout).strip()
+    idx_list, idx_obj = raw.find("["), raw.find("{")
+    if idx_list != -1 and (idx_obj == -1 or idx_list < idx_obj):
+        raw = raw[idx_list:]
+    elif idx_obj != -1:
+        raw = raw[idx_obj:]
+    try:
+        return json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+
+
 def fetch_items(
     repo: str, item_type: str, limit: int
 ) -> List[Dict[str, Any]]:
@@ -77,7 +104,6 @@ def fetch_items(
         f"Fetching oldest open {item_type}s from {repo} "
         f"(limit: {'all' if limit <= 0 else limit})..."
     )
-    # Disable GH interactive TTY/spinner, colors, and update check
     clean_env = dict(
         os.environ,
         GH_FORCE_TTY="0",
@@ -90,24 +116,12 @@ def fetch_items(
         logging.error(f"Failed to fetch {item_type}s from {repo}: {res.stderr}")
         return []
 
-    # Strip ANSI escape codes (e.g., color sequences emitted by gh)
-    raw_output = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", res.stdout).strip()
-
-    # Strip any leading spinner/ANSI garbage before the first '[' or '{'
-    idx_list = raw_output.find("[")
-    idx_obj = raw_output.find("{")
-    if idx_list != -1 and (idx_obj == -1 or idx_list < idx_obj):
-        raw_output = raw_output[idx_list:]
-    elif idx_obj != -1:
-        raw_output = raw_output[idx_obj:]
-
-    try:
-        items = json.loads(raw_output)
+    items = parse_gh_json(res.stdout)
+    if items is not None and isinstance(items, list):
         logging.info(f"Retrieved {len(items)} {item_type}(s) from {repo}.")
         return items
-    except json.JSONDecodeError as exc:
-        logging.error(f"Failed to parse json from `gh` output: {exc}")
-        return []
+    logging.error("Failed to parse json from `gh` output.")
+    return []
 
 
 def fetch_item(repo: str, item_type: str, number: int) -> Optional[Dict[str, Any]]:
@@ -125,11 +139,39 @@ def fetch_item(repo: str, item_type: str, number: int) -> Optional[Dict[str, Any
     ]
     res = run_command(cmd, check=False)
     if res.returncode == 0 and res.stdout:
-        try:
-            return json.loads(res.stdout)
-        except json.JSONDecodeError:
-            return None
+        return parse_gh_json(res.stdout)
     return None
+
+
+def load_timed_out_items(
+    repo: str, itype: str, output_dir: Path, status_data: Dict[str, Any]
+) -> List[Dict[str, Any]]:
+    """Load items that previously timed out from local metadata files or gh."""
+    repo_short = get_short_repo_name(repo)
+    timed_out_nums = [
+        v.get("number")
+        for v in status_data.get("items", {}).values()
+        if v.get("repo") == repo
+        and v.get("type") == itype
+        and v.get("status") == "timeout"
+        and v.get("number") is not None
+    ]
+    items = []
+    for num in timed_out_nums:
+        meta_file = output_dir / repo_short / itype / str(num) / "metadata.json"
+        meta = None
+        if meta_file.exists():
+            try:
+                with open(meta_file, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+            except Exception:
+                meta = None
+        if not meta:
+            meta = fetch_item(repo, itype, num)
+        if meta:
+            items.append(meta)
+    logging.info(f"Found {len(items)} timed-out item(s) to retry in {repo}.")
+    return items
 
 
 def sync_results(output_dir: Path, status_data: Dict[str, Any]) -> bool:
@@ -306,14 +348,8 @@ def archive_closed_items(
                 )
                 continue
 
-            raw_output = re.sub(r"\x1b\[[0-9;]*[a-zA-Z]", "", res.stdout).strip()
-            idx_list = raw_output.find("[")
-            if idx_list != -1:
-                raw_output = raw_output[idx_list:]
-
-            try:
-                closed_records = json.loads(raw_output)
-            except json.JSONDecodeError:
+            closed_records = parse_gh_json(res.stdout)
+            if not closed_records or not isinstance(closed_records, list):
                 continue
 
             closed_numbers = {
@@ -339,13 +375,10 @@ def archive_closed_items(
                 archived_dict[item_key] = info
 
                 src_dir = output_dir / repo_short / itype / str(num)
-                dest_dir = (
-                    output_dir / "archive" / repo_short / itype / str(num)
-                )
+                dest_dir = output_dir / "archive" / repo_short / itype / str(num)
                 if src_dir.exists():
                     dest_dir.parent.mkdir(parents=True, exist_ok=True)
-                    if dest_dir.exists():
-                        shutil.rmtree(dest_dir)
+                    shutil.rmtree(dest_dir, ignore_errors=True)
                     shutil.move(str(src_dir), str(dest_dir))
                 archived_count += 1
                 logging.info(f"Archived closed item: {item_key}")
@@ -514,7 +547,7 @@ def find_agentapi() -> str:
 
 def discover_ls_address() -> Optional[str]:
     """Auto-discover active ANTIGRAVITY_LS_ADDRESS and related variables from running processes."""
-    if "ANTIGRAVITY_LS_ADDRESS" in os.environ and os.environ["ANTIGRAVITY_LS_ADDRESS"]:
+    if os.environ.get("ANTIGRAVITY_LS_ADDRESS"):
         return os.environ["ANTIGRAVITY_LS_ADDRESS"]
     try:
         res = subprocess.run(
@@ -531,19 +564,21 @@ def discover_ls_address() -> Optional[str]:
                 line = entry.decode("utf-8", errors="ignore")
                 if "=" in line:
                     k, v = line.split("=", 1)
-                    if k.startswith("ANTIGRAVITY_") and k not in ("ANTIGRAVITY_SOURCE_METADATA", "ANTIGRAVITY_CONVERSATION_ID"):
+                    if k.startswith("ANTIGRAVITY_") and k not in (
+                        "ANTIGRAVITY_SOURCE_METADATA",
+                        "ANTIGRAVITY_CONVERSATION_ID",
+                    ):
                         if v:
                             os.environ[k] = v
             if "ANTIGRAVITY_LS_ADDRESS" in os.environ:
                 addr = os.environ["ANTIGRAVITY_LS_ADDRESS"]
-                if "ANTIGRAVITY_PROJECT_ID" not in os.environ:
-                    os.environ["ANTIGRAVITY_PROJECT_ID"] = "default-cli-project"
+                os.environ.setdefault("ANTIGRAVITY_PROJECT_ID", "default-cli-project")
                 logging.info(f"Auto-discovered active Language Server address: {addr}")
                 return addr
     except Exception as exc:
         logging.debug(f"Auto-discovery of Language Server failed: {exc}")
-    if "ANTIGRAVITY_LS_ADDRESS" in os.environ and "ANTIGRAVITY_PROJECT_ID" not in os.environ:
-        os.environ["ANTIGRAVITY_PROJECT_ID"] = "default-cli-project"
+    if "ANTIGRAVITY_LS_ADDRESS" in os.environ:
+        os.environ.setdefault("ANTIGRAVITY_PROJECT_ID", "default-cli-project")
     return None
 
 
@@ -557,8 +592,6 @@ def spawn_subagent(
 ) -> Dict[str, Any]:
     """Launch the sub-agent runner and return execution status."""
     prefix = f"Agent[{agent_id}] " if agent_id is not None else ""
-    result_path = item_dir / "result.json"
-
     if dry_run:
         logging.info(f"[DRY-RUN] {prefix}Would spawn agent for: {title}")
         return {"status": "dry_run", "error": None}
@@ -596,32 +629,41 @@ def spawn_subagent(
                 logging.error(
                     f"{prefix}Runner failed after {max_retries} attempts with code {proc.returncode}: {err_msg}"
                 )
-                return {
-                    "status": "failed",
-                    "error": err_msg,
-                }
+                return {"status": "failed", "error": err_msg}
         except subprocess.TimeoutExpired:
             return {"status": "timeout", "error": f"Timed out after {format_duration(timeout)}"}
+    return {"status": "failed", "error": "Unknown error"}
 
 
-def format_duration(seconds: int) -> str:
-    """Format seconds into human readable duration string (e.g. 30m0s, 1h5m0s)."""
-    if seconds < 60:
-        return f"{seconds}s"
-    minutes, secs = divmod(seconds, 60)
-    hours, minutes = divmod(minutes, 60)
-    if hours > 0:
-        return f"{hours}h{minutes}m{secs}s"
-    return f"{minutes}m{secs}s"
+def poll_finished_agents(
+    pending: Dict[str, Tuple[Path, int]],
+    available_slots: Optional[List[int]] = None,
+) -> List[str]:
+    """Check pending agents for completion, clean up worktrees, and release worker slots."""
+    finished = []
+    for item_key, (result_file, aid) in list(pending.items()):
+        if result_file.exists():
+            prefix = f"Agent[{aid}] " if aid is not None else ""
+            logging.info(f"{prefix}Finished investigation for {item_key}.")
+            cleanup_item_worktrees(result_file.parent)
+            finished.append(item_key)
+            del pending[item_key]
+            if available_slots is not None:
+                available_slots.append(aid)
+                available_slots.sort()
+
+    if finished and pending:
+        logging.info(f"Waiting for {len(pending)} remaining agent(s)...")
+    return finished
 
 
 def wait_for_pending_subagents(
-    pending_items: Dict[str, Tuple[Path, Optional[int]]],
+    pending_items: Dict[str, Tuple[Path, int]],
     timeout: int,
     output_dir: Path,
     status_data: Dict[str, Any],
 ) -> None:
-    """Wait for all spawned async agents to complete their investigations before exiting."""
+    """Wait for all spawned async agents to complete their investigations."""
     if not pending_items:
         return
 
@@ -633,32 +675,18 @@ def wait_for_pending_subagents(
     remaining = dict(pending_items)
 
     while remaining and (time.time() - start_time < timeout):
-        finished_keys = []
-        for item_key, (result_file, aid) in remaining.items():
-            prefix = f"Agent[{aid}] " if aid is not None else ""
-            if result_file.exists():
-                logging.info(f"{prefix}Finished investigation for {item_key}.")
-                cleanup_item_worktrees(result_file.parent)
-                finished_keys.append(item_key)
-
-        for item_key in finished_keys:
-            del remaining[item_key]
-
-        if finished_keys and remaining:
-            logging.info(f"Waiting for {len(remaining)} remaining agent(s)...")
-
+        poll_finished_agents(remaining)
         if remaining:
             sync_results(output_dir, status_data)
             time.sleep(poll_interval)
 
-    # Final sync of status.json and status.md
     sync_results(output_dir, status_data)
 
     if remaining:
         logging.warning(
             f"Timed out waiting for {len(remaining)} agent(s): {', '.join(remaining.keys())}"
         )
-        for item_key in remaining.keys():
+        for item_key, (_, aid) in remaining.items():
             if item_key in status_data.get("items", {}):
                 item_entry = status_data["items"][item_key]
                 item_entry["status"] = "timeout"
@@ -787,8 +815,8 @@ def process_item(
     return True, pending_path
 
 
-def main() -> int:
-    """Parse CLI arguments and run the triage orchestration loop."""
+def build_arg_parser() -> argparse.ArgumentParser:
+    """Build command-line argument parser."""
     parser = argparse.ArgumentParser(
         description="Emscripten & Emscripten SDK Triage Orchestrator"
     )
@@ -902,7 +930,12 @@ def main() -> int:
         action="store_true",
         help="Enable verbose debug logging",
     )
+    return parser
 
+
+def main() -> int:
+    """Parse CLI arguments and run the triage orchestration loop."""
+    parser = build_arg_parser()
     args = parser.parse_args()
     logging.basicConfig(
         level=logging.DEBUG if args.verbose else logging.INFO,
@@ -962,36 +995,8 @@ def main() -> int:
                     and v.get("status") == "completed"
                 )
                 if args.retry_timeout_only:
-                    timed_out_keys = [
-                        k
-                        for k, v in status_data.get("items", {}).items()
-                        if v.get("repo") == repo
-                        and v.get("type") == itype
-                        and v.get("status") == "timeout"
-                    ]
-                    items = []
-                    for k in timed_out_keys:
-                        item_entry = status_data["items"][k]
-                        num = item_entry.get("number")
-                        meta_file = (
-                            args.output_dir
-                            / repo_short
-                            / itype
-                            / str(num)
-                            / "metadata.json"
-                        )
-                        if meta_file.exists():
-                            try:
-                                with open(meta_file, "r", encoding="utf-8") as f:
-                                    items.append(json.load(f))
-                            except Exception:
-                                pass
-                        if not any(it.get("number") == num for it in items):
-                            meta = fetch_item(repo, itype, num)
-                            if meta:
-                                items.append(meta)
-                    logging.info(
-                        f"Found {len(items)} timed-out item(s) to retry in {repo}."
+                    items = load_timed_out_items(
+                        repo, itype, args.output_dir, status_data
                     )
                 else:
                     fetch_batch_size = (
@@ -1000,12 +1005,12 @@ def main() -> int:
                         else 0
                     )
                     items = fetch_items(repo, itype, fetch_batch_size)
+
                 for item in items:
                     if args.limit > 0 and processed_in_type >= args.limit:
                         break
 
                     is_reinvestigate = item.get("number") in reinvestigate_nums
-                    repo_short = get_short_repo_name(repo)
                     item_key = f"{repo_short}:{itype}:{item.get('number')}"
                     existing = status_data["items"].get(item_key, {})
                     existing_status = existing.get("status")
@@ -1023,27 +1028,8 @@ def main() -> int:
                         skipped_in_type = 0
 
                     if will_process:
-                        # Enforce concurrency throttling: wait if all worker slots are occupied
                         while args.concurrency > 0 and not available_slots:
-                            finished_keys = []
-                            for item_k, (result_file, aid) in pending_subagents.items():
-                                if result_file.exists():
-                                    logging.info(
-                                        f"Agent[{aid}] Finished investigation for {item_k}."
-                                    )
-                                    cleanup_item_worktrees(result_file.parent)
-                                    finished_keys.append((item_k, aid))
-
-                            for item_k, aid in finished_keys:
-                                del pending_subagents[item_k]
-                                available_slots.append(aid)
-                                available_slots.sort()
-
-                            if finished_keys and pending_subagents:
-                                logging.info(
-                                    f"Waiting for {len(pending_subagents)} remaining agent(s)..."
-                                )
-
+                            poll_finished_agents(pending_subagents, available_slots)
                             if not available_slots:
                                 sync_results(args.output_dir, status_data)
                                 time.sleep(3)
@@ -1074,8 +1060,6 @@ def main() -> int:
                         skipped_in_type += 1
 
                     if pending_file and current_agent_id is not None:
-                        repo_short = get_short_repo_name(repo)
-                        item_key = f"{repo_short}:{itype}:{item.get('number')}"
                         pending_subagents[item_key] = (pending_file, current_agent_id)
                     elif will_process and current_agent_id is not None:
                         available_slots.append(current_agent_id)
