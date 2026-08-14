@@ -34,7 +34,13 @@ def sync_results(status_path: Path, data: Dict[str, Any]) -> bool:
         num = info.get("number")
         if not (repo_short and itype and num):
             continue
-        result_file = output_dir / repo_short / itype / str(num) / "result.json"
+        item_dir = output_dir / repo_short / itype / str(num)
+        result_file = item_dir / "result.json"
+        if not result_file.exists() and (item_dir / "history").exists():
+            history_results = sorted((item_dir / "history").glob("run_*/result.json"))
+            if history_results:
+                result_file = history_results[-1]
+
         if result_file.exists():
             try:
                 with open(result_file, "r", encoding="utf-8") as f:
@@ -56,7 +62,7 @@ def sync_results(status_path: Path, data: Dict[str, Any]) -> bool:
                         or info.get("rationale", "N/A")
                     )
                     info["actionability"] = str(payload.get("actionability", "unknown"))
-                    if info.get("status") == "unknown":
+                    if info.get("status") in ("unknown", "timeout"):
                         info["status"] = "completed"
                     updated = True
             except Exception as exc:
