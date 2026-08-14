@@ -519,7 +519,7 @@ If you need to checkout or bisect repositories located outside your working dire
 2. Follow the 5-step triage workflow:
    - **Classification**: Determine actionability, staleness, and feature relevance.
    - **Reproduction**: Try reproducing on `main` and/or the historically reported version using `emsdk`.
-   - **Bisection**: If it is a confirmed regression between versions, bisect to identify the root cause or component.
+   - **Bisection / PR Discovery**: If fixed on `main` or if the feature was implemented, search git logs (`git log --grep="#<number>"`, `git log -S...`) to find the exact GitHub PR or commit that resolved it.
 3. Keep a detailed chronological log of your investigation, environment setup, and test runs. Write this narrative log to `{investigation_path}`.
 4. When done, you **MUST write a structured JSON file** summarizing your conclusion to `{result_path}`.
 
@@ -530,11 +530,15 @@ The JSON output at `{result_path}` MUST match this exact schema:
   "certainty": "high | medium | low",
   "rationale": "Clear 1-3 sentence summary explaining the recommendation and certainty.",
   "actionability": "high | medium | low",
+  "resolved_pr": "PR_number_or_null (e.g. '#14321' or '14321')",
+  "resolved_commit": "commit_hash_or_null",
   "reproduced_on_reported_version": true | false | null,
   "reproduced_on_main": true | false | null,
   "bisected_commit": "commit_hash_or_null",
-  "suggested_close_comment": "Draft comment that could be posted later when closing the issue (if applicable)."
+  "suggested_close_comment": "Draft comment citing resolving PR #NNN where applicable."
 }}
+
+**MANDATORY**: For any `close/fixed` or `close/implemented` recommendation, search git history and cite the resolving GitHub PR number in `resolved_pr`, `rationale`, and `suggested_close_comment`.
 
 Please begin by reading `{skill_path}` and inspecting the item details."""
     return prompt

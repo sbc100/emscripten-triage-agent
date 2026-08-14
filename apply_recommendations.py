@@ -115,12 +115,19 @@ def generate_default_comment(
         return suggested.strip()
 
     rec = recommendation.lower()
+    pr_ref = payload.get("resolved_pr")
+    commit_ref = payload.get("resolved_commit") or payload.get("bisected_commit")
+    ref_parts = []
+    if pr_ref:
+        ref_parts.append(f"PR {pr_ref}" if not str(pr_ref).startswith("#") else f"PR {pr_ref}")
+    if commit_ref:
+        ref_parts.append(f"commit {commit_ref}")
+    ref_msg = f" (in {', '.join(ref_parts)})" if ref_parts else ""
+
     if rec.startswith("close/fixed"):
-        commit = payload.get("bisected_commit")
-        ref_msg = f" (commit/PR {commit})" if commit else ""
         return f"This issue appears to be resolved on current `main`{ref_msg}.\n\n{rationale}\n\nClosing as resolved."
     if rec.startswith("close/implemented"):
-        return f"The requested feature has been implemented in Emscripten.\n\n{rationale}\n\nClosing as completed."
+        return f"The requested feature has been implemented in Emscripten{ref_msg}.\n\n{rationale}\n\nClosing as completed."
     if rec.startswith("close/invalid"):
         return f"Closing this issue based on triage review.\n\n{rationale}"
     if rec.startswith("close/duplicate"):
