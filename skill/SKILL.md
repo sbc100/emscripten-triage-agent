@@ -59,8 +59,8 @@ For each assigned issue or PR, produce two files inside the issue directory (`is
 ```
 
 ### Granular Recommendation Guide:
-- **`close/fixed`**: Verified resolved/fixed on current `main`. **MANDATORY**: You MUST search git history (`git log --grep="#<number>"`, `git log -S...`) to identify the resolving PR or commit, and cite the GitHub PR number in `resolved_pr`, `rationale`, and `suggested_close_comment`.
-- **`close/implemented`**: Feature request that has already been implemented in Emscripten. **MANDATORY**: Search git history to find the PR or commit that added the feature, citing the GitHub PR number in `resolved_pr`, `rationale`, and `suggested_close_comment`.
+- **`close/fixed`**: Verified resolved/fixed on current `main`. Search git history (`git log --grep="#<number>"`, `git log -S...`) to identify the resolving PR or commit whenever possible, citing the GitHub PR number in `resolved_pr`, `rationale`, and `suggested_close_comment`.
+- **`close/implemented`**: Feature request that has already been implemented in Emscripten. Search git history to find the PR or commit that added the feature, citing the GitHub PR number in `resolved_pr`, `rationale`, and `suggested_close_comment` if found.
 - **`close/invalid`**: Working as intended, user configuration error, or answered usage question.
 - **`close/duplicate`**: Duplicate of another issue or pull request (cite duplicate `#NNN`).
 - **`close/obsolete`**: Relates to deprecated/removed architectures (`fastcomp`, `asm.js`, Python 2, obsolete runtimes).
@@ -122,15 +122,15 @@ If the issue does NOT reproduce on `main` (suggesting it was fixed), or if you n
 - **CRITICAL SOURCE BUILD RULE**:
   - **If your timeout budget is less than 30 minutes, NEVER attempt full source builds of LLVM, Binaryen, or Emscripten (`cmake`, `ninja`, etc.)**.
   - Always use pre-compiled binary packages via `emsdk install <version_or_hash>`.
-- **Pinpoint Resolving Commit / PR (Mandatory for `close/fixed` and `close/implemented`)**:
+- **Pinpoint Resolving Commit / PR (Recommended for `close/fixed` and `close/implemented`)**:
   - If verified broken on `<reported_version>` but working on `main` (or if feature was added), search commit log and PRs for the resolution:
     ```bash
     git -C ../emscripten log --grep="#<issue_number>" --oneline
     git -C ../emscripten log -S "<symbol_or_feature>" --oneline -n 20
     git -C ../emscripten log -L :<function_name>:src/path/to/file.js
     ```
-  - **Always prefer the GitHub PR number** (e.g. `PR #14321` or `PR #14321 (commit abc1234)`).
-  - Explicitly include this in `resolved_pr`, `resolved_commit`, `rationale`, and `suggested_close_comment`.
+  - **Always prefer the GitHub PR number** if found (e.g. `PR #14321` or `PR #14321 (commit abc1234)`).
+  - Include this in `resolved_pr`, `resolved_commit`, `rationale`, and `suggested_close_comment`. If the exact commit/PR cannot be identified within 1-2 minutes, proceed with the recommendation and note that it is verified working on `main`.
 
 ### 4. Multi-Repository Worktree Guidance (On-Demand Isolation)
 Only construct a git worktree if you need to check out a specific older Git commit or make a local test patch:

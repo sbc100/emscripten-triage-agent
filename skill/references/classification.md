@@ -8,12 +8,12 @@ Use these criteria to evaluate actionability, staleness, certainty, and recommen
 Recommend `close/fixed` with **High Certainty** if:
 1. You successfully reproduce the reported failure using the historical version mentioned in the issue (or verify the bug from the description/logs).
 2. You verify that the exact same test case compiles and runs cleanly on current `main`.
-3. **MANDATORY**: You identify the PR or commit that resolved the issue (via `git log -S "<symbol>"`, `git log --grep="#<number>"`, etc.) and cite the GitHub PR number in your recommendation.
+3. You search git history (`git log -S "<symbol>"`, `git log --grep="#<number>"`, etc.) to identify the PR or commit that resolved the issue if possible, citing the GitHub PR number in your recommendation.
 
 ### `close/implemented` (Feature Added)
 Recommend `close/implemented` with **High Certainty** if:
 1. The issue is a feature or API request that has since been implemented in Emscripten (in `src/` or `tools/`).
-2. **MANDATORY**: You identify the PR or commit that added the feature and cite the GitHub PR number in your recommendation.
+2. You identify the PR or commit that added the feature if possible, citing the GitHub PR number in your recommendation.
 
 ### `close/invalid` (Working as Intended / User Error / Documented)
 Recommend `close/invalid` with **High Certainty** if:

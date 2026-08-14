@@ -538,7 +538,7 @@ The JSON output at `{result_path}` MUST match this exact schema:
   "suggested_close_comment": "Draft comment citing resolving PR #NNN where applicable."
 }}
 
-**MANDATORY**: For any `close/fixed` or `close/implemented` recommendation, search git history and cite the resolving GitHub PR number in `resolved_pr`, `rationale`, and `suggested_close_comment`.
+**Note**: For any `close/fixed` or `close/implemented` recommendation, search git history (`git log --grep="#<number>"`, `git log -S...`) and cite the resolving GitHub PR number or commit if found.
 
 Please begin by reading `{skill_path}` and inspecting the item details."""
     return prompt
