@@ -946,7 +946,8 @@ def main() -> int:
 
         processed_any = False
         pending_subagents: Dict[str, Tuple[Path, int]] = {}
-        agent_counter = 0
+        max_workers = args.concurrency if args.concurrency > 0 else 1000
+        available_slots = sorted(list(range(1, max_workers + 1)))
 
         for repo in repos:
             for itype in item_types:
@@ -1003,32 +1004,6 @@ def main() -> int:
                     if args.limit > 0 and processed_in_type >= args.limit:
                         break
 
-                    # Enforce concurrency throttling: wait if active agents >= concurrency limit
-                    while (
-                        args.concurrency > 0
-                        and len(pending_subagents) >= args.concurrency
-                    ):
-                        finished_keys = []
-                        for item_key, (result_file, aid) in pending_subagents.items():
-                            if result_file.exists():
-                                logging.info(
-                                    f"Agent[{aid}] Finished investigation for {item_key}."
-                                )
-                                cleanup_item_worktrees(result_file.parent)
-                                finished_keys.append(item_key)
-
-                        for item_key in finished_keys:
-                            del pending_subagents[item_key]
-
-                        if finished_keys and pending_subagents:
-                            logging.info(
-                                f"Waiting for {len(pending_subagents)} remaining agent(s)..."
-                            )
-
-                        if len(pending_subagents) >= args.concurrency:
-                            sync_results(args.output_dir, status_data)
-                            time.sleep(3)
-
                     is_reinvestigate = item.get("number") in reinvestigate_nums
                     repo_short = get_short_repo_name(repo)
                     item_key = f"{repo_short}:{itype}:{item.get('number')}"
@@ -1047,10 +1022,35 @@ def main() -> int:
                         logging.info(f"Skipped {skipped_in_type} already completed/investigated issue(s).")
                         skipped_in_type = 0
 
-                    current_agent_id = None
                     if will_process:
-                        agent_counter += 1
-                        current_agent_id = agent_counter
+                        # Enforce concurrency throttling: wait if all worker slots are occupied
+                        while args.concurrency > 0 and not available_slots:
+                            finished_keys = []
+                            for item_k, (result_file, aid) in pending_subagents.items():
+                                if result_file.exists():
+                                    logging.info(
+                                        f"Agent[{aid}] Finished investigation for {item_k}."
+                                    )
+                                    cleanup_item_worktrees(result_file.parent)
+                                    finished_keys.append((item_k, aid))
+
+                            for item_k, aid in finished_keys:
+                                del pending_subagents[item_k]
+                                available_slots.append(aid)
+                                available_slots.sort()
+
+                            if finished_keys and pending_subagents:
+                                logging.info(
+                                    f"Waiting for {len(pending_subagents)} remaining agent(s)..."
+                                )
+
+                            if not available_slots:
+                                sync_results(args.output_dir, status_data)
+                                time.sleep(3)
+
+                        current_agent_id = available_slots.pop(0) if available_slots else 1
+                    else:
+                        current_agent_id = None
 
                     did_process, pending_file = process_item(
                         item=item,
@@ -1077,6 +1077,9 @@ def main() -> int:
                         repo_short = get_short_repo_name(repo)
                         item_key = f"{repo_short}:{itype}:{item.get('number')}"
                         pending_subagents[item_key] = (pending_file, current_agent_id)
+                    elif will_process and current_agent_id is not None:
+                        available_slots.append(current_agent_id)
+                        available_slots.sort()
 
                 if skipped_in_type > 0:
                     logging.info(f"Skipped {skipped_in_type} already completed/investigated issue(s).")
